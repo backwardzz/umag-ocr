@@ -1,0 +1,211 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { recognizeInvoice } from './ocr/engine';
+import { loadMapping, saveMapping, mapKey, type MappingStore } from './core/mapping';
+import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
+import { toReportBlob, type ExportSettings } from './core/export';
+import type { ParsedDoc, ParsedItem } from './core/types';
+import { applyMapping, docSupplierKey, newItem, patchItem, type DocEntry } from './app/model';
+import { loadSettings, saveSettings, downloadBlob } from './app/storage';
+import { UploadZone } from './app/UploadZone';
+import { DocList } from './app/DocList';
+import { DocView } from './app/DocView';
+import { SettingsDrawer } from './app/SettingsDrawer';
+import { HelpModal } from './app/HelpModal';
+import { IconBook, IconHelp, IconSettings } from './app/Icons';
+
+let seq = 0;
+const newId = () => `d${Date.now().toString(36)}${(seq++).toString(36)}`;
+
+export default function App() {
+  const [docs, setDocs] = useState<DocEntry[]>([]);
+  const [selected, setSelected] = useState<string>();
+  const [settings, setSettingsState] = useState<ExportSettings>(loadSettings);
+  const [mapping, setMappingState] = useState<MappingStore>(loadMapping);
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>(loadCatalog);
+  const [drawer, setDrawer] = useState<{ open: boolean; tab: 'export' | 'catalog' | 'mapping' }>({ open: false, tab: 'export' });
+  const [help, setHelp] = useState(false);
+  const [toastText, setToastText] = useState<string>();
+  const files = useRef(new Map<string, File>());
+  const mappingRef = useRef(mapping);
+  mappingRef.current = mapping;
+
+  const catalog = useMemo(() => (catalogItems.length ? new CatalogIndex(catalogItems) : undefined), [catalogItems]);
+
+  const toast = useCallback((t: string) => {
+    setToastText(t);
+    window.setTimeout(() => setToastText((cur) => (cur === t ? undefined : cur)), 4500);
+  }, []);
+
+  const update = useCallback((id: string, patch: Partial<DocEntry> | ((d: DocEntry) => Partial<DocEntry>)) => {
+    setDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...(typeof patch === 'function' ? patch(d) : patch) } : d)));
+  }, []);
+
+  const process = useCallback((id: string) => {
+    const file = files.current.get(id);
+    if (!file) return;
+    update(id, { status: 'queued', progress: 0, error: undefined });
+    let last = -1;
+    recognizeInvoice(file, (stage, p) => {
+      const pct = Math.round(p * 100);
+      if (pct === last) return;
+      last = pct;
+      update(id, { status: 'processing', stage, progress: p });
+    })
+      .then((res) => update(id, { status: 'done', progress: 1, doc: applyMapping(res.doc, mappingRef.current), processedUrl: res.processedUrl }))
+      .catch((err: unknown) => update(id, { status: 'error', error: err instanceof Error ? err.message : String(err) }));
+  }, [update]);
+
+  const addFiles = useCallback((list: File[]) => {
+    const entries: DocEntry[] = list.map((f) => {
+      const id = newId();
+      files.current.set(id, f);
+      return { id, fileName: f.name, fileUrl: URL.createObjectURL(f), status: 'queued', progress: 0 };
+    });
+    setDocs((prev) => [...prev, ...entries]);
+    setSelected((cur) => cur ?? entries[0]?.id);
+    entries.forEach((e) => process(e.id));
+  }, [process]);
+
+  // Режим разработки: ?demo загружает примеры из samples/ (в сборку не попадают)
+  useEffect(() => {
+    const w = window as unknown as { __demoLoaded?: boolean };
+    // StrictMode и горячая перезагрузка вызывают эффект повторно
+    if (!import.meta.env.DEV || w.__demoLoaded || !new URLSearchParams(location.search).has('demo')) return;
+    w.__demoLoaded = true;
+    const names = (new URLSearchParams(location.search).get('demo') || '1,2,3').split(',');
+    Promise.all(names.map(async (n) => {
+      const r = await fetch(`/samples/${n}.jpg`);
+      return new File([await r.blob()], `${n}.jpg`, { type: 'image/jpeg' });
+    })).then(addFiles);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Предупреждение при закрытии вкладки, если есть распознанные накладные
+  useEffect(() => {
+    if (!docs.length) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [docs.length]);
+
+  const setSettings = (s: ExportSettings) => { setSettingsState(s); saveSettings(s); };
+  const setMapping = (m: MappingStore) => {
+    setMappingState(m);
+    if (!saveMapping(m)) toast('Не удалось сохранить справочник в браузере (приватный режим?) — сохраните его в файл');
+  };
+  const setCatalog = (items: CatalogItem[]) => {
+    setCatalogItems(items);
+    if (!saveCatalog(items)) toast('Каталог слишком большой для хранения в браузере — он будет работать до перезагрузки страницы');
+  };
+
+  const current = docs.find((d) => d.id === selected);
+
+  const changeDoc = (id: string, fn: (doc: ParsedDoc) => ParsedDoc) =>
+    update(id, (d) => (d.doc ? { doc: fn(d.doc) } : {}));
+
+  const onItemChange = (index: number, patch: Partial<ParsedItem>) => {
+    if (!current?.doc) return;
+    const doc = current.doc;
+    const item = doc.items[index];
+    changeDoc(current.id, (d) => ({ ...d, items: d.items.map((it, i) => (i === index ? patchItem(it, patch) : it)) }));
+    // Штрихкод для кода поставщика — запоминаем и подставляем в другие открытые накладные
+    if ('barcode' in patch && patch.barcode && item.code && item.barcodeSource !== 'invoice') {
+      const sk = docSupplierKey(doc);
+      const m: MappingStore = {
+        ...mappingRef.current,
+        [mapKey(sk, item.code)]: { barcode: patch.barcode, name: item.name, supplier: doc.supplier, updated: new Date().toISOString() },
+      };
+      setMapping(m);
+      setDocs((prev) => prev.map((d) => (d.doc && d.id !== current.id && docSupplierKey(d.doc) === sk ? { ...d, doc: applyMapping(d.doc, m) } : d)));
+      toast(`Запомнено: код ${item.code} → ${patch.barcode}`);
+    }
+  };
+
+  const onDelete = (id: string) => {
+    setDocs((prev) => {
+      const next = prev.filter((d) => d.id !== id);
+      if (selected === id) setSelected(next[0]?.id);
+      return next;
+    });
+    files.current.delete(id);
+  };
+
+  const doneDocs = docs.filter((d) => d.doc).map((d) => d.doc!);
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand__mark" aria-hidden>≡</span>
+          <span className="brand__name">Накладные <span className="brand__arrow">→</span> UMAG</span>
+        </div>
+        <nav className="topbar__nav">
+          {doneDocs.length > 1 && (
+            <button type="button" className="btn btn--ghost" onClick={() => downloadBlob(toReportBlob(doneDocs), 'Отчёт_по_накладным.xlsx')}>
+              Отчёт по всем
+            </button>
+          )}
+          <button type="button" className="btn btn--ghost" onClick={() => setHelp(true)} aria-label="Как загрузить в UMAG" title="Как загрузить в UMAG"><IconHelp /> <span className="hide-sm">Как загрузить в UMAG</span></button>
+          <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'mapping' })} aria-label="Справочник кодов" title="Справочник кодов"><IconBook /> <span className="hide-sm">Справочник</span></button>
+          <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'export' })} aria-label="Настройки" title="Настройки"><IconSettings /> <span className="hide-sm">Настройки</span></button>
+        </nav>
+      </header>
+
+      {docs.length === 0 ? (
+        <main className="empty">
+          <h1>Фото накладной → Excel для UMAG</h1>
+          <p className="muted">Распознавание работает прямо в браузере, фото никуда не отправляются.</p>
+          <UploadZone onFiles={addFiles} />
+          <ol className="empty__steps">
+            <li><b>Сфотографируйте</b> накладную или выберите готовые фото</li>
+            <li><b>Проверьте</b> строки, отмеченные жёлтым или красным</li>
+            <li><b>Скачайте Excel</b> и загрузите его в UMAG: «Приёмка» → «Импорт товаров»</li>
+          </ol>
+          <p className="muted small">Сейчас узнаёт: GRAND Кондитер, Мегаполис-Казахстан, Сэт Кола и другие накладные по форме З-2.</p>
+        </main>
+      ) : (
+        <div className="layout">
+          <aside className="sidebar">
+            <UploadZone onFiles={addFiles} compact />
+            <DocList docs={docs} selected={selected} catalog={catalog} onSelect={setSelected} />
+          </aside>
+          <main className="main">
+            {current ? (
+              <DocView
+                key={current.id}
+                entry={current}
+                settings={settings}
+                catalog={catalog}
+                onDocChange={(doc) => changeDoc(current.id, () => doc)}
+                onItemChange={onItemChange}
+                onItemRemove={(i) => changeDoc(current.id, (d) => ({ ...d, items: d.items.filter((_, k) => k !== i) }))}
+                onItemAdd={() => changeDoc(current.id, (d) => ({ ...d, items: [...d.items, newItem(d.items.length + 1)] }))}
+                onDelete={() => onDelete(current.id)}
+                onRetry={() => process(current.id)}
+                toast={toast}
+              />
+            ) : (
+              <p className="muted pad">Выберите накладную слева</p>
+            )}
+          </main>
+        </div>
+      )}
+
+      <SettingsDrawer
+        open={drawer.open}
+        tab={drawer.tab}
+        onTab={(tab) => setDrawer({ open: true, tab })}
+        onClose={() => setDrawer((d) => ({ ...d, open: false }))}
+        settings={settings}
+        onSettings={setSettings}
+        catalogSize={catalog?.size ?? 0}
+        onCatalog={setCatalog}
+        mapping={mapping}
+        onMapping={setMapping}
+        toast={toast}
+      />
+      <HelpModal open={help} onClose={() => setHelp(false)} />
+      {toastText && <div className="toast" role="status">{toastText}</div>}
+    </div>
+  );
+}

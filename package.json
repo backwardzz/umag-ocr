@@ -1,0 +1,33 @@
+{
+  "name": "umag-ocr",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Распознавание фото накладных и выгрузка в Excel для импорта в UMAG",
+  "scripts": {
+    "postinstall": "node scripts/copy-ocr-assets.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "ocr": "tsx scripts/ocr-cli.ts",
+    "test": "tsx scripts/test-parsers.ts"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^5.1.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^7.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.3",
+    "vite": "^6.4.3"
+  }
+}
