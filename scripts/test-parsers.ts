@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as XLSX from 'xlsx';
 import { parseDocument } from '../src/core/parse';
-import { buildRows, toXlsxBlob, DEFAULT_EXPORT } from '../src/core/export';
+import { buildRows, toXlsxBlob, DEFAULT_EXPORT, COLUMN_LABELS, type ExportColumn } from '../src/core/export';
 import type { OcrPage } from '../src/core/ocrTypes';
 import type { ParsedDoc } from '../src/core/types';
 import { printDoc } from './print';
@@ -21,18 +21,21 @@ if (!fs.existsSync(dir)) {
   process.exit(0);
 }
 
-/** Excel для UMAG: штрихкод — текстом, количество и цена — числами */
+/** Excel для UMAG: штрихкод, название и единица — текстом, количество и цена — числами */
 async function checkExcel(doc: ParsedDoc): Promise<string[]> {
   const withCodes: ParsedDoc = { ...doc, items: doc.items.map((it, i) => ({ ...it, barcode: it.barcode ?? `20000000${String(i).padStart(5, '0')}` })) };
-  const rows = buildRows(withCodes, DEFAULT_EXPORT);
-  const wb = XLSX.read(Buffer.from(await toXlsxBlob(rows, DEFAULT_EXPORT.columns).arrayBuffer()));
+  const columns: ExportColumn[] = [...DEFAULT_EXPORT.columns, 'price'];
+  const rows = buildRows(withCodes, { ...DEFAULT_EXPORT, columns });
+  const wb = XLSX.read(Buffer.from(await toXlsxBlob(rows, columns).arrayBuffer()));
   const ws = wb.Sheets[wb.SheetNames[0]];
   const errs: string[] = [];
   rows.forEach((r, i) => {
-    const [a, b, c] = ['A', 'B', 'C'].map((col) => ws[`${col}${i + 1}`]);
-    if (a?.t !== 's' || a.v !== r[0]) errs.push(`Excel строка ${i + 1}: штрихкод ${JSON.stringify(a?.v)} (${a?.t})`);
-    if (b?.t !== 'n' || b.v !== r[1]) errs.push(`Excel строка ${i + 1}: количество ${JSON.stringify(b?.v)}`);
-    if (c?.t !== 'n' || c.v !== r[2]) errs.push(`Excel строка ${i + 1}: цена ${JSON.stringify(c?.v)}`);
+    columns.forEach((c, ci) => {
+      const cell = ws[XLSX.utils.encode_cell({ r: i, c: ci })];
+      if (r[ci] === '') return;
+      const type = c === 'qty' || c === 'price' ? 'n' : 's';
+      if (cell?.t !== type || cell.v !== r[ci]) errs.push(`Excel строка ${i + 1}: ${COLUMN_LABELS[c]} ${JSON.stringify(cell?.v)} (${cell?.t})`);
+    });
   });
   return errs;
 }

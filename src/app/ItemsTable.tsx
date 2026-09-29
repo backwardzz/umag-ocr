@@ -93,6 +93,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
             <th className="c-bc">Штрихкод</th>
             <th className="c-name">Наименование</th>
             <th className="c-num">Кол-во</th>
+            <th className="c-unit">Ед. изм</th>
             <th className="c-num">Цена, ₸</th>
             <th className="c-num">Сумма, ₸</th>
             <th className="c-st" aria-label="Статус" />
@@ -140,9 +141,12 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                 </td>
                 <td className="c-num">
                   <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} />
-                  <div className="cell-sub cell-sub--num">
-                    {it.pack ? `${qtyFmt(it.pack.count)} уп × ${it.pack.size}` : it.unit ?? ''}
-                  </div>
+                  {it.pack && (
+                    <div className="cell-sub cell-sub--num">{qtyFmt(it.pack.count)} уп × {it.pack.size}</div>
+                  )}
+                </td>
+                <td className="c-unit">
+                  <TextInput value={it.unit ?? ''} label={`Ед. изм, строка ${i + 1}`} onCommit={(v) => onChange(i, { unit: v || undefined })} />
                 </td>
                 <td className="c-num">
                   <NumInput money value={it.price} label={`Цена, строка ${i + 1}`} invalid={it.price === undefined} onCommit={(v) => onChange(i, { price: v })} />

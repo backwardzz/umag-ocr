@@ -63,7 +63,7 @@ export function SettingsDrawer(p: Props) {
         {p.tab === 'export' && (
           <div className="drawer__body">
             <h3>Столбцы и их порядок</h3>
-            <p className="muted">Порядок должен совпадать с тем, что вы выберете над столбцами в окне «Импорт товаров» UMAG. По умолчанию UMAG предлагает «Штрихкод», «Количество».</p>
+            <p className="muted">Порядок должен совпадать с тем, что вы выберете над столбцами в окне «Импорт товаров» UMAG. По умолчанию UMAG предлагает «Штрихкод», «Количество», «Название», «Ед. изм».</p>
             <ul className="colpick">
               {ordered.map((c) => {
                 const on = s.columns.includes(c);

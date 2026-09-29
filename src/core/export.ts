@@ -1,8 +1,8 @@
 /**
  * Выгрузка для UMAG. Импорт в «Приёмке» (Закупки → Приёмка → «📥 Импорт товаров»)
  * принимает файл или вставку столбцов через Ctrl+V; назначение каждого столбца
- * выбирается в выпадающем списке над ним, по умолчанию: Штрихкод, Количество.
- * Поэтому по умолчанию выгружаем в том же порядке: Штрихкод, Количество, Цена —
+ * выбирается в выпадающем списке над ним, для 4 столбцов по умолчанию:
+ * Штрихкод, Количество, Название, Ед. изм. Поэтому выгружаем в том же порядке —
  * и без строки заголовка (иначе UMAG примет её за товар).
  */
 import * as XLSX from 'xlsx';
@@ -15,10 +15,10 @@ export const COLUMN_LABELS: Record<ExportColumn, string> = {
   barcode: 'Штрихкод',
   qty: 'Количество',
   price: 'Цена закупки',
-  name: 'Наименование',
+  name: 'Название',
   sum: 'Сумма',
   code: 'Код поставщика',
-  unit: 'Ед. изм.',
+  unit: 'Ед. изм',
 };
 
 export interface ExportSettings {
@@ -29,18 +29,18 @@ export interface ExportSettings {
 }
 
 export const DEFAULT_EXPORT: ExportSettings = {
-  columns: ['barcode', 'qty', 'price'],
+  columns: ['barcode', 'qty', 'name', 'unit'],
   header: false,
   qtyMode: 'pcs',
 };
 
-/** Количество и цена с учётом режима упаковок */
-export function qtyPrice(it: ParsedItem, mode: ExportSettings['qtyMode']): { qty?: number; price?: number } {
+/** Количество, цена и единица с учётом режима упаковок */
+export function qtyPrice(it: ParsedItem, mode: ExportSettings['qtyMode']): { qty?: number; price?: number; unit?: string } {
   if (mode === 'packs' && it.pack && it.qty !== undefined && it.sum !== undefined) {
     const qty = it.qty / it.pack.size;
-    return { qty, price: round2(it.sum / qty) };
+    return { qty, price: round2(it.sum / qty), unit: 'уп' };
   }
-  return { qty: it.qty, price: it.price };
+  return { qty: it.qty, price: it.price, unit: it.unit };
 }
 
 export function exportableItems(doc: ParsedDoc): ParsedItem[] {
@@ -51,7 +51,7 @@ export function buildRows(doc: ParsedDoc, s: ExportSettings): (string | number)[
   const rows: (string | number)[][] = [];
   if (s.header) rows.push(s.columns.map((c) => COLUMN_LABELS[c]));
   for (const it of exportableItems(doc)) {
-    const { qty, price } = qtyPrice(it, s.qtyMode);
+    const { qty, price, unit } = qtyPrice(it, s.qtyMode);
     rows.push(s.columns.map((c) => {
       switch (c) {
         case 'barcode': return it.barcode ?? '';
@@ -60,7 +60,7 @@ export function buildRows(doc: ParsedDoc, s: ExportSettings): (string | number)[
         case 'name': return it.name;
         case 'sum': return it.sum ?? '';
         case 'code': return it.code ?? '';
-        case 'unit': return it.unit ?? '';
+        case 'unit': return unit ?? '';
       }
     }));
   }
@@ -84,7 +84,7 @@ export function toXlsxBlob(rows: (string | number)[][], columns: ExportColumn[],
       if ((c === 'price' || c === 'sum') && cell.t === 'n') cell.z = '0.00';
     }
   });
-  ws['!cols'] = columns.map((c) => ({ wch: c === 'name' ? 48 : c === 'barcode' ? 16 : 12 }));
+  ws['!cols'] = columns.map((c) => ({ wch: c === 'name' ? 48 : c === 'barcode' ? 16 : c === 'unit' ? 8 : 12 }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });

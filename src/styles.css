@@ -191,7 +191,7 @@ button, input { font: inherit; color: inherit; }
 
 .items-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
 .table-wrap { overflow-x: auto; }
-.items { width: 100%; min-width: 780px; border-collapse: collapse; }
+.items { width: 100%; min-width: 850px; border-collapse: collapse; }
 .items th {
   text-align: left; font-size: 12px; font-weight: 600; color: var(--muted);
   padding: 8px 6px; border-bottom: 1px solid var(--border); background: var(--surface-2); white-space: nowrap;
@@ -204,6 +204,7 @@ button, input { font: inherit; color: inherit; }
 .c-name { min-width: 220px; }
 .c-num { width: 110px; min-width: 96px; text-align: right; }
 .items th.c-num { text-align: right; }
+.c-unit { width: 72px; min-width: 64px; }
 .c-sum { padding-top: 13px !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .c-st { width: 72px; white-space: nowrap; }
 .row--error { background: color-mix(in srgb, var(--err-soft) 55%, transparent); }
