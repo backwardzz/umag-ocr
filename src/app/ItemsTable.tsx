@@ -130,6 +130,17 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                   <div className="cell-sub">
                     {it.code && it.code !== it.barcode && <span>код {it.code}{it.codeAlt && !it.barcode ? ` / ${it.codeAlt}` : ''}</span>}
                     {it.barcodeSource === 'mapping' && <span className="tag">из справочника</span>}
+                    {it.barcodeSource === 'catalog' && (
+                      <>
+                        <span className="tag tag--hint" title={`Найдено в каталоге UMAG: ${it.catalogMatch?.name ?? ''}`}>
+                          автозаполнение · возможна ошибка
+                        </span>
+                        <button type="button" className="tag tag--btn" title="Штрихкод верный — запомнить для этого товара"
+                          onClick={() => onChange(i, { barcode: it.barcode })}>
+                          верно
+                        </button>
+                      </>
+                    )}
                     {suggestions.length > 0 && <span className="tag tag--hint">есть подсказки: {suggestions.length}</span>}
                     {sameAs !== undefined && <span className="tag" title="В файле для UMAG строки с одинаковым штрихкодом складываются">сложится со строкой {sameAs + 1}</span>}
                   </div>

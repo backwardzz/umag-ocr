@@ -16,8 +16,12 @@ export interface ParsedItem {
   codeAlt?: string;
   /** Штрихкод для UMAG (из накладной, если это EAN, или из справочника) */
   barcode?: string;
-  /** Откуда взят штрихкод */
-  barcodeSource?: 'invoice' | 'mapping' | 'manual';
+  /** Откуда взят штрихкод; catalog — автозаполнение из каталога UMAG (возможны ошибки) */
+  barcodeSource?: 'invoice' | 'mapping' | 'manual' | 'catalog';
+  /** Для автозаполнения: товар каталога, с которым сопоставлена строка, и как (по коду или по названию) */
+  catalogMatch?: { name: string; by: 'code' | 'name' };
+  /** Другие коды строки (NTIN), по которым товар можно найти в каталоге UMAG */
+  extraCodes?: string[];
   /** Строку правили вручную — замечания OCR к ней больше не актуальны */
   edited?: boolean;
   name: string;

@@ -4,7 +4,7 @@ import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
 import { issue, type ParsedDoc, type ParsedItem } from './core/types';
-import { applyMapping, docSupplierKey, findRelated, mergePages, newItem, patchItem, type DocEntry } from './app/model';
+import { applyCatalog, applyMapping, docSupplierKey, findRelated, mergePages, newItem, patchItem, type DocEntry } from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
 import { UploadZone } from './app/UploadZone';
 import { DocList } from './app/DocList';
@@ -32,6 +32,14 @@ export default function App() {
   docsRef.current = docs;
 
   const catalog = useMemo(() => (catalogItems.length ? new CatalogIndex(catalogItems) : undefined), [catalogItems]);
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
+  // Каталог загрузили, заменили или очистили — пересчитываем автозаполнение во всех накладных
+  const firstCatalog = useRef(true);
+  useEffect(() => {
+    if (firstCatalog.current) { firstCatalog.current = false; return; }
+    setDocs((prev) => prev.map((d) => (d.doc ? { ...d, doc: applyCatalog(d.doc, catalog) } : d)));
+  }, [catalog]);
 
   const toast = useCallback((t: string) => {
     setToastText(t);
@@ -54,7 +62,8 @@ export default function App() {
       update(id, { status: 'processing', stage, progress: p });
     })
       .then((res) => {
-        const doc = applyMapping(res.doc, mappingRef.current);
+        // Сначала справочник (штрихкоды, подтверждённые пользователем), затем автозаполнение из каталога
+        const doc = applyCatalog(applyMapping(res.doc, mappingRef.current), catalogRef.current);
         const self = docsRef.current.find((d) => d.id === id);
         const rel = findRelated(docsRef.current, id, doc);
         if (rel?.kind === 'page' && self) {
@@ -226,7 +235,7 @@ export default function App() {
         onClose={() => setDrawer((d) => ({ ...d, open: false }))}
         settings={settings}
         onSettings={setSettings}
-        catalogSize={catalog?.size ?? 0}
+        catalogSize={catalogItems.length}
         onCatalog={setCatalog}
         mapping={mapping}
         onMapping={setMapping}

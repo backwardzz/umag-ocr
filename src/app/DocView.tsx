@@ -7,6 +7,9 @@ import { ItemsTable } from './ItemsTable';
 import { downloadBlob, copyText } from './storage';
 import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh } from './Icons';
 
+const plural = (n: number, one: string, few: string, many: string) =>
+  n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
+
 interface Props {
   entry: DocEntry;
   settings: ExportSettings;
@@ -107,6 +110,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   );
 
   const parserIssues = doc.issues.filter((x) => x.kind !== 'totals' && x.level !== 'info');
+  const autofilled = doc.items.filter((it) => it.barcodeSource === 'catalog').length;
   const partial = s.total !== undefined && s.sum > 0 && s.total > s.sum * 1.3;
 
   return (
@@ -168,6 +172,13 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
         {photo}
         <section className="items-panel">
           <ItemsTable items={doc.items} catalog={catalog} onChange={onItemChange} onRemove={onItemRemove} onAdd={onItemAdd} />
+          {autofilled > 0 && (
+            <p className="autofill-note">
+              <IconAlert /> Штрихкоды в {autofilled} {plural(autofilled, 'строке', 'строках', 'строках')} заполнены автоматически
+              по каталогу UMAG (такие строки отмечены «автозаполнение»). Возможны ошибки: сверьте товар и нажмите «верно» —
+              подтверждённый штрихкод запомнится и в следующий раз подставится без пометки.
+            </p>
+          )}
         </section>
       </div>
     </div>

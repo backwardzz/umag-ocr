@@ -134,7 +134,10 @@ export function toReportBlob(docs: ParsedDoc[]): Blob {
       rows.push([
         it.n, it.barcode ?? '', it.code ?? '', it.name, it.unit ?? '', it.qty ?? '',
         it.pack ? `${it.pack.count} x ${it.pack.size}` : '', it.price ?? '', it.sum ?? '', it.vat ?? '',
-        it.issues.filter((x) => x.level !== 'info').map((x) => x.text).join('; '),
+        [
+          ...(it.barcodeSource === 'catalog' ? [`Штрихкод — автозаполнение из каталога UMAG («${it.catalogMatch?.name ?? ''}»), возможна ошибка`] : []),
+          ...it.issues.filter((x) => x.level !== 'info').map((x) => x.text),
+        ].join('; '),
       ]);
     }
     rows.push([], ['', '', '', 'Итого по строкам', '', '', '', '', round2(d.items.reduce((a, b) => a + (b.sum ?? 0), 0))]);

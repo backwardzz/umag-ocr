@@ -227,6 +227,13 @@ button, input { font: inherit; color: inherit; }
 .cell-sub--num { justify-content: flex-end; }
 .tag { background: var(--primary-soft); color: var(--primary); border-radius: 4px; padding: 0 5px; }
 .tag--hint { background: var(--warn-soft); color: var(--warn); }
+.tag--btn { border: 1px solid currentColor; font: inherit; line-height: inherit; cursor: pointer; background: transparent; }
+.tag--btn:hover { background: var(--primary-soft); }
+.autofill-note {
+  display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 10px 12px;
+  border-top: 1px solid var(--border); background: var(--warn-soft); color: var(--warn); font-size: 13px;
+}
+.autofill-note svg { flex: none; margin-top: 2px; }
 .row-issues { list-style: none; margin: 4px 0 0; padding: 0 8px; display: grid; gap: 2px; }
 .row-issue { font-size: 12.5px; padding-left: 14px; position: relative; }
 .row-issue::before { content: ''; position: absolute; left: 2px; top: 7px; width: 6px; height: 6px; border-radius: 50%; }

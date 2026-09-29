@@ -85,14 +85,15 @@ export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
   const byName = Object.entries(mapping).filter(([k]) => k.startsWith(`${sk}::name:`));
   let changed = false;
   const items = doc.items.map((it) => {
-    if (it.barcode) return it;
+    // автозаполнение из каталога справочник (подтверждённое пользователем) перекрывает
+    if (it.barcode && it.barcodeSource !== 'catalog') return it;
     if (!it.code) {
       const key = itemMapCode(it);
       if (!key) return it;
       const exact = mapping[mapKey(sk, key)];
       if (exact) {
         changed = true;
-        return { ...it, barcode: exact.barcode, barcodeSource: 'mapping' as const };
+        return { ...it, barcode: exact.barcode, barcodeSource: 'mapping' as const, catalogMatch: undefined };
       }
       // OCR читает название каждый раз чуть по-разному — ищем самое похожее из запомненных
       let best: MapEntry | undefined, score = 0;
@@ -103,23 +104,45 @@ export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
       if (!best || score < 0.72) return it;
       changed = true;
       return {
-        ...it, barcode: best.barcode, barcodeSource: 'mapping' as const,
+        ...it, barcode: best.barcode, barcodeSource: 'mapping' as const, catalogMatch: undefined,
         issues: [...it.issues, issue('warn', `Штрихкод из справочника по похожему названию «${best.name ?? ''}» — сверьте`, 'fuzzy')],
       };
     }
     const m = mapping[mapKey(sk, it.code)];
     if (m) {
       changed = true;
-      return { ...it, barcode: m.barcode, barcodeSource: 'mapping' as const, issues: it.issues.filter((x) => x.kind !== 'code') };
+      return { ...it, barcode: m.barcode, barcodeSource: 'mapping' as const, catalogMatch: undefined, issues: it.issues.filter((x) => x.kind !== 'code') };
     }
     // Два прохода OCR прочитали код по-разному — известный справочнику вариант верный
     const alt = it.codeAlt ? mapping[mapKey(sk, it.codeAlt)] : undefined;
     if (!alt) return it;
     changed = true;
     return {
-      ...it, code: it.codeAlt, codeAlt: it.code, barcode: alt.barcode, barcodeSource: 'mapping' as const,
+      ...it, code: it.codeAlt, codeAlt: it.code, barcode: alt.barcode, barcodeSource: 'mapping' as const, catalogMatch: undefined,
       issues: it.issues.filter((x) => x.kind !== 'code'),
     };
+  });
+  return changed ? { ...doc, items } : doc;
+}
+
+/**
+ * Автозаполнение штрихкодов из каталога UMAG для строк, где штрихкода нет ни в накладной,
+ * ни в справочнике: по NTIN (точно) или по похожему названию (возможны ошибки).
+ * Прежнее автозаполнение пересчитывается — каталог могли заменить или очистить.
+ */
+export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc {
+  let changed = false;
+  const items = doc.items.map((it) => {
+    let cur = it;
+    if (cur.barcodeSource === 'catalog') {
+      cur = { ...cur, barcode: undefined, barcodeSource: undefined, catalogMatch: undefined };
+      changed = true;
+    }
+    if (cur.barcode || !catalog?.size || !cur.qty) return cur;
+    const m = catalog.match({ name: cur.name, unit: cur.unit, supplier: doc.supplier, codes: [...(cur.extraCodes ?? []), ...(cur.code ? [cur.code] : [])] });
+    if (!m) return cur;
+    changed = true;
+    return { ...cur, barcode: m.item.barcode, barcodeSource: 'catalog' as const, catalogMatch: { name: m.item.name, by: m.by } };
   });
   return changed ? { ...doc, items } : doc;
 }
@@ -134,6 +157,10 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
         ? 'Нет штрихкода — введите один раз, для этого товара он запомнится'
         : 'Нет штрихкода — строка не попадёт в файл', 'barcode'));
   } else {
+    if (it.barcodeSource === 'catalog' && it.catalogMatch) {
+      out.push(issue('warn', `Штрихкод — автозаполнение из каталога UMAG ${it.catalogMatch.by === 'code' ? 'по NTIN' : 'по названию'}: `
+        + `«${it.catalogMatch.name}». Возможна ошибка — сверьте`, 'autofill'));
+    }
     if (!/^\d+$/.test(it.barcode)) out.push(issue('error', 'Штрихкод должен состоять только из цифр'));
     // Внутренние штрихкоды магазина (начинаются с 2) бывают без контрольной цифры
     else if ((it.barcode.length === 13 || it.barcode.length === 8) && !isValidEan(it.barcode) && !it.barcode.startsWith('2'))
@@ -197,7 +224,10 @@ export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedIte
     if (next.qty !== undefined && next.price !== undefined) next.sum = round2(next.qty * next.price);
     if (next.pack && next.qty !== undefined) next.pack = { ...next.pack, count: round2(next.qty / next.pack.size) };
   }
-  if ('barcode' in patch) next.barcodeSource = patch.barcode ? 'manual' : undefined;
+  if ('barcode' in patch) {
+    next.barcodeSource = patch.barcode ? 'manual' : undefined;
+    next.catalogMatch = undefined;
+  }
   return next;
 }
 

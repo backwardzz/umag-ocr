@@ -623,6 +623,10 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       nameWords = bandWords.filter((w) => w.x1 <= right && w.x0 < codeX0);
     }
     const name = cleanName(nameWords, lineH);
+    // NTIN из строки («NTIN: 0200132903914» у Евразиан, столбец NTIN у Yupiter): в UMAG часть товаров
+    // заведена со штрихкодом, равным NTIN, — по нему каталог найдёт товар точно
+    // (неуверенно прочитанный NTIN может совпасть с кодом другого товара — такие не берём)
+    const ntins = [...new Set(bandWords.filter((w) => w.conf >= 50).map((w) => fixDigits(w.text).replace(/\D/g, '')).filter((d) => /^0?2\d{11}$/.test(d)))];
 
     // Весовой товар: «5,23» OCR читает как «523» — добавляем варианты с потерянной запятой
     const weight = unit === 'кг';
@@ -653,6 +657,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       issues: [...sol.issues],
       alternatives: sol.alternatives.map(({ qty, price, sum }) => ({ qty, price, sum })),
       readings: { price: numsOf('price'), sum: numsOf('sum'), support: sol.support },
+      extraCodes: ntins.length ? ntins : undefined,
       raw: [wordsToText(nameWords, lineH), anc.code, ...cells.map((c) => c.text)].filter(Boolean).join(' | '),
     };
     if (opts.code !== 'none') applyCode(item, anc, opts);
@@ -726,13 +731,18 @@ function cleanName(allWords: Word[], lineH: number): string {
   // Линии сетки и печати OCR читает как «П О Г ВИ Ш» с низкой уверенностью — такие строки выбрасываем
   const lines = new Map<number, Word[]>();
   for (const w of allWords) lines.set(w.line, [...(lines.get(w.line) ?? []), w]);
-  const junk = new Set([...lines].filter(([, ws]) => ws.filter((w) => w.conf < 50).length >= ws.length * 0.5).map(([li]) => li));
+  // (строка с уверенно прочитанным словом — не мусор: «PEPSI-COLA Бан …» при общей низкой уверенности)
+  const junk = new Set([...lines].filter(([, ws]) => ws.filter((w) => w.conf < 50).length >= ws.length * 0.5
+    && !ws.some((w) => w.conf >= 80 && /[A-Za-zА-Яа-яЁё]{3,}/.test(w.text))).map(([li]) => li));
   const nameWords = allWords.filter((w) => !junk.has(w.line) && !(w.conf < 30 && w.text.length <= 3) && !(w.conf < 60 && w.text.length <= 2 && !/\d/.test(w.text)));
   // отрезаем № п/п и мусор в начале строк названия
   const mx = median(nameWords.map((x) => x.x0));
   const nameClean = nameWords.filter((w) => !(/^[\W\d_]{0,4}$/.test(w.text) && w.x0 < mx));
   let name = wordsToText(nameClean.filter((w) => /[A-Za-zА-Яа-яЁё0-9]/.test(w.text)), lineH)
-    .replace(/[`"'“”„«»°|_~^\\]/g, '')
+    // «0.45'24_IM_KAZ» — знак между числами заменяем пробелом, иначе объём склеится с упаковкой («0.4524»)
+    .replace(/(\d)[`'’°_~^](\d)/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/[`"'“”„«»°|~^\\]/g, '')
     .replace(/\bNTIN:?\s*[\d\s]*/gi, ' ')
     .replace(/\b\d{10,}\b/g, ' ')
     .replace(/^[\s\-—–.,:;]+/, '')
