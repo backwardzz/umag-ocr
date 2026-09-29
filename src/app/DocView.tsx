@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
 import type { ParsedDoc, ParsedItem } from '../core/types';
-import { buildRows, exportFileName, toTsv, toXlsxBlob, toReportBlob, type ExportSettings } from '../core/export';
+import { buildRows, exportFileName, mergedLineCount, toTsv, toXlsxBlob, toReportBlob, type ExportSettings } from '../core/export';
 import { summarize, money, type DocEntry } from './model';
 import { ItemsTable } from './ItemsTable';
 import { downloadBlob, copyText } from './storage';
@@ -25,8 +25,11 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   const [zoom, setZoom] = useState(1);
   // На узких экранах фото над таблицей; его можно свернуть
   const [photoOpen, setPhotoOpen] = useState(() => window.innerWidth >= 1400);
+  const [pageIdx, setPageIdx] = useState(0);
   const doc = entry.doc;
   const open = photoOpen || !doc;
+  const pages = [{ fileUrl: entry.fileUrl, processedUrl: entry.processedUrl }, ...(entry.extraPages ?? [])];
+  const page = pages[Math.min(pageIdx, pages.length - 1)];
 
   const photo = (
     <section className={`photo ${open ? '' : 'photo--collapsed'}`}>
@@ -38,8 +41,17 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
         )}
         <div className="seg" role="tablist">
           <button type="button" role="tab" aria-selected={view === 'photo'} className={view === 'photo' ? 'is-on' : ''} onClick={() => { setView('photo'); setPhotoOpen(true); }}>Фото</button>
-          <button type="button" role="tab" aria-selected={view === 'ocr'} className={view === 'ocr' ? 'is-on' : ''} disabled={!entry.processedUrl} onClick={() => { setView('ocr'); setPhotoOpen(true); }}>Как видит OCR</button>
+          <button type="button" role="tab" aria-selected={view === 'ocr'} className={view === 'ocr' ? 'is-on' : ''} disabled={!page.processedUrl} onClick={() => { setView('ocr'); setPhotoOpen(true); }}>Как видит OCR</button>
         </div>
+        {pages.length > 1 && (
+          <div className="seg" role="tablist" aria-label="Страницы накладной">
+            {pages.map((_, i) => (
+              <button key={i} type="button" role="tab" aria-selected={page === pages[i]} className={page === pages[i] ? 'is-on' : ''} onClick={() => { setPageIdx(i); setPhotoOpen(true); }}>
+                Стр. {i + 1}
+              </button>
+            ))}
+          </div>
+        )}
         {open && <div className="seg">
           <button type="button" onClick={() => setZoom((z) => Math.max(1, z / 1.5))} aria-label="Уменьшить">−</button>
           <button type="button" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
@@ -47,7 +59,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
         </div>}
       </div>
       <div className="photo__view">
-        <img src={view === 'ocr' && entry.processedUrl ? entry.processedUrl : entry.fileUrl} alt="Фото накладной" style={{ width: `${zoom * 100}%` }} />
+        <img src={view === 'ocr' && page.processedUrl ? page.processedUrl : page.fileUrl} alt="Фото накладной" style={{ width: `${zoom * 100}%` }} />
       </div>
     </section>
   );
@@ -76,6 +88,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   const s = summarize(doc, catalog);
   const rows = buildRows(doc, settings);
   const dataRows = rows.length - (settings.header ? 1 : 0);
+  const merged = mergedLineCount(doc);
 
   const download = () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего выгружать'); return; }
@@ -94,6 +107,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   );
 
   const parserIssues = doc.issues.filter((x) => x.kind !== 'totals' && x.level !== 'info');
+  const partial = s.total !== undefined && s.sum > 0 && s.total > s.sum * 1.3;
 
   return (
     <div className="docview">
@@ -133,10 +147,20 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
         <span className={`chip ${s.missingBarcode ? 'chip--warn' : ''}`}>
           В файл: {s.exportable} из {s.rows}{s.missingBarcode ? ` · ${s.missingBarcode} без штрихкода` : ''}
         </span>
+        {merged > 0 && (
+          <span className="chip" title="UMAG ищет товар по штрихкоду, поэтому строки с одинаковым штрихкодом (например, бонусные по 1 ₸) складываются в одну: количество суммируется, цена — средняя">
+            Одинаковые штрихкоды сложены: {dataRows} строк в файле
+          </span>
+        )}
       </div>
-      {parserIssues.length > 0 && (
+      {(parserIssues.length > 0 || partial) && (
         <ul className="doc-issues">
           {parserIssues.map((x, i) => <li key={i} className={`row-issue row-issue--${x.level}`}>{x.text}</li>)}
+          {partial && (
+            <li className="row-issue row-issue--warn">
+              Итог накладной намного больше суммы строк — похоже, это не вся накладная. Загрузите остальные страницы: страницы с тем же номером склеятся сами.
+            </li>
+          )}
         </ul>
       )}
 

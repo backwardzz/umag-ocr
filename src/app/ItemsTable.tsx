@@ -78,10 +78,12 @@ function focusNextEmptyBarcode(from: number) {
 }
 
 export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props) {
-  const rows = useMemo(() => items.map((it) => {
+  const rows = useMemo(() => items.map((it, i) => {
     const issues = allIssues(it, catalog);
     const suggestions = !it.barcode && catalog && catalog.size ? catalog.suggest(it.name) : [];
-    return { it, issues, level: worstLevel(issues), suggestions };
+    // тот же штрихкод выше (бонусная строка) — в файле строки сложатся
+    const first = it.barcode ? items.findIndex((x) => x.barcode === it.barcode) : -1;
+    return { it, issues, level: worstLevel(issues), suggestions, sameAs: first >= 0 && first < i ? first : undefined };
   }), [items, catalog]);
 
   return (
@@ -100,7 +102,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ it, issues, level, suggestions }, i) => {
+          {rows.map(({ it, issues, level, suggestions, sameAs }, i) => {
             // «нет штрихкода» видно по красному полю — отдельной строкой не дублируем
             const shown = issues.filter((x) => x.level !== 'info' && x.kind !== 'barcode');
             const infos = issues.filter((x) => x.level === 'info');
@@ -129,6 +131,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                     {it.code && it.code !== it.barcode && <span>код {it.code}{it.codeAlt && !it.barcode ? ` / ${it.codeAlt}` : ''}</span>}
                     {it.barcodeSource === 'mapping' && <span className="tag">из справочника</span>}
                     {suggestions.length > 0 && <span className="tag tag--hint">есть подсказки: {suggestions.length}</span>}
+                    {sameAs !== undefined && <span className="tag" title="В файле для UMAG строки с одинаковым штрихкодом складываются">сложится со строкой {sameAs + 1}</span>}
                   </div>
                 </td>
                 <td className="c-name">

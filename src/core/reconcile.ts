@@ -9,6 +9,13 @@ import { issue, type Issue } from './types';
 export interface RowReadings {
   /** Прочитанные количества (например, «подлежит отпуску» и «отпущено») */
   qty: number[];
+  /**
+   * Из них — «подлежит отпуску»: обычно равно отпущенному, но при усушке/скидке веса
+   * отличается (5,28 → 5,23 кг), поэтому весит меньше столбца «отпущено»
+   */
+  qtyPlan?: number[];
+  /** Весовой товар (кг): дробное количество вероятнее целого (OCR теряет запятую: 5,23 → 523) */
+  weight?: boolean;
   /** Варианты прочитанной цены (с разными трактовками запятой) */
   price: number[];
   /** Варианты прочитанной суммы */
@@ -37,6 +44,7 @@ export interface RowSolution {
   price?: number;
   sum?: number;
   vat?: number;
+  /** Сколько независимых прочтений подтверждают выбранный вариант */
   support: number;
   issues: Issue[];
   /** Другие правдоподобные варианты (для сверки с итогом документа) */
@@ -98,15 +106,22 @@ export function solveRow(r: RowReadings): RowSolution {
       const tol = sumTol(q);
       let score = 0;
       let support = 0;
+      const plan = r.qtyPlan ?? [];
       const qHits = r.qty.filter((x) => near(x, q, 0.0001)).length;
-      if (qHits) { score += 2 + qHits; support++; }
+      const planHits = plan.filter((x) => near(x, q, 0.0001)).length;
+      if (qHits > planHits) { score += 2 + qHits; support++; }
+      else if (qHits) { score += 1 + qHits * 0.5; support++; }
       else if (qtyC.length) score -= 1; // количество прочитано, но не совпало
       if (priceC.some((x) => near(x, p, 0.005))) { score += 3; support++; }
       else if (priceC.some((x) => oneDigitOff(x, p))) score += 1;
-      const sRead = sumC.find((x) => near(x, s, tol));
+      // из нескольких прочтений суммы — ближайшее к q × p (910,01 и 910,00 при 5 × 182)
+      const sRead = sumC.filter((x) => near(x, s, tol)).sort((x, y) => Math.abs(x - s) - Math.abs(y - s))[0];
       if (sRead !== undefined) { score += 3; support++; }
       else if (sumC.some((x) => oneDigitOff(x, s))) score += 1;
-      const sFinal = sRead ?? s;
+      // Сумма в накладной — это q × p с округлением до тиын. Прочтение, отличающееся на 1 тиын
+      // при точно прочитанной цене, — ошибка OCR (910,01 вместо 910,00)
+      const exactPrice = priceC.some((x) => near(x, p, 0.001));
+      const sFinal = sRead !== undefined && !(exactPrice && Math.abs(sRead - s) <= 0.011) ? sRead : s;
       const rateOk = rates.find((rate) => vatC.some((v) => near(v, vatOf(sFinal, rate, r.vatIncluded), 0.03)));
       if (rateOk !== undefined) { score += rateOk === r.vatRate ? 2 : 1; support++; }
       else if (vatC.some((v) => oneDigitOff(v, vatOf(sFinal, r.vatRate, r.vatIncluded)))) score += 1;
@@ -114,11 +129,17 @@ export function solveRow(r: RowReadings): RowSolution {
         if (rates.some((rate) => totalC.some((t) => near(t, round2(sFinal * (1 + rate)), 0.03 + tol)))) { score += 3; support++; }
         else if (totalC.some((t) => oneDigitOff(t, round2(sFinal * (1 + r.vatRate))))) score += 1;
       }
-      if (Number.isInteger(q)) score += 0.5;
+      // целое количество вероятнее — если только в строке не прочитано дробное (вес: 5,23 кг)
+      if (Number.isInteger(q) && !r.qty.some((x) => !Number.isInteger(x))) score += 0.5;
+      if (r.weight && !Number.isInteger(q)) score += 0.5;
+      // «отпущено» обычно равно «подлежит отпуску» или чуть меньше (усушка) — но не в 10 раз
+      if (!planHits && plan.some((x) => Math.abs(x - q) <= x * 0.1)) score += 0.5;
       cands.push({ qty: q, price: p, sum: sFinal, score, support });
     }
   }
-  cands.sort((a, b) => b.score - a.score);
+  // Сначала — больше независимых подтверждений (кол-во, цена, сумма, НДС), затем баллы:
+  // два одинаково неверных прочтения количества не должны перевесить прочитанную цену
+  cands.sort((a, b) => b.support - a.support || b.score - a.score);
 
   const best = cands[0];
   if (!best) {

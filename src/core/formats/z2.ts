@@ -1,16 +1,19 @@
 /**
- * Накладная на отпуск запасов на сторону, форма З-2 (приказ МФ РК №562).
- * Стандартные столбцы: 1 №, 2 Наименование, 3 Номенклатурный номер, 4 Ед. изм.,
- * 5 Подлежит отпуску, 6 Отпущено, 7 Цена, 8 Сумма с НДС, 9 Сумма НДС.
+ * Табличные накладные: форма З-2 (приказ МФ РК №562) и похожие на неё
+ * упаковочные листы и расходные накладные. Типичные столбцы: №, Наименование,
+ * Номенклатурный номер / Штрихкод, Ед. изм., Подлежит отпуску, Отпущено, Цена,
+ * Сумма с НДС, Сумма НДС. У разных поставщиков бывают лишние столбцы (коробки,
+ * цена по прайсу, скидка, вес), поэтому столбцы определяем не по порядку, а по
+ * арифметике: количество × цена = сумма.
  *
  * Алгоритм:
- *  1. Якоря строк — коды в столбце «Номенклатурный номер» (EAN-13 или код поставщика);
- *     оставляем только коды из одного столбца (по x), чтобы отсечь БИН и прочие цифры.
- *  2. Числа справа от кода берём из той же строки OCR (Tesseract ведёт строку по
- *     базовой линии и переживает изгиб листа), запасной вариант — полоса между
- *     соседними кодами. Линии сетки для разбивки строк не используем: лист бывает
- *     согнут, и правая половина таблицы смещена относительно левой.
- *  3. Ячейки раскладываем по столбцам по правому краю (числа выровнены вправо).
+ *  1. Якоря строк — коды в столбце кодов (EAN-8/13 или код поставщика); оставляем
+ *     только коды из одного столбца (по x), чтобы отсечь БИН, артикулы и прочие цифры.
+ *     Если кодов в накладной нет, якорь — самый правый заполненный столбец чисел.
+ *  2. Полоса строки зависит от раскладки: числа на одной линии с кодом (center),
+ *     внизу строки под кодом (top — код у верхнего края) или над ним (bottom).
+ *  3. Числовые ячейки раскладываем по столбцам по правому краю (числа выровнены вправо),
+ *     роли столбцов находим голосованием строк: q × p = s, НДС = s × 16/116.
  *  4. Если был второй проход по столбцам (page.strips), добавляем его прочтения.
  *  5. Каждую строку сверяем по арифметике (reconcile.ts), итог — с «Итого».
  */
@@ -24,8 +27,16 @@ import { issue, type ParsedDoc, type ParsedItem } from '../types';
 import type { Z2Options } from '../suppliers';
 
 const VAT_RATE = 0.16;
-const ROLE_NAMES = ['qtyPlan', 'qty', 'price', 'sum', 'vat'] as const;
-type Role = (typeof ROLE_NAMES)[number];
+export type Role = 'qtyPlan' | 'qty' | 'price' | 'sum' | 'vat';
+type ColRole = Role | 'skip';
+const LEGACY_ROLES: Role[] = ['qtyPlan', 'qty', 'price', 'sum', 'vat'];
+
+/** Единицы в ячейках, включая типичные ошибки OCR (wr = шт, kop = кор) */
+const UNIT_WORD = String.raw`(?:шт|wr|ur|um|шr|кг|kr|kg|блок|бут|byt|уп|упак|пач|пачка|пак|кор|kop|бан|банка|л)`;
+const UNIT_CELL_RE = new RegExp(String.raw`^${UNIT_WORD}\.?$`, 'i');
+const TRAILING_UNIT_RE = new RegExp(String.raw`\s*(${UNIT_WORD})\.?$`, 'i');
+/** Мусор, который OCR цепляет к числам: кавычки, штрихи, скобки, линии таблицы */
+const JUNK_RE = /[`'’‘"“”„«»°*;:|!_~^\\()[\]{}—–]/g;
 
 function cleanCode(text: string): string | undefined {
   // убираем кавычки, апострофы и пр. по краям, но не запятые внутри (это суммы)
@@ -33,10 +44,49 @@ function cleanCode(text: string): string | undefined {
   return /^\d+$/.test(t) ? t : undefined;
 }
 
+/** EAN-8/13; 14 цифр — EAN-13 с лишней цифрой в конце (так печатает учётная программа некоторых поставщиков) */
+const eanLike = (c: string) => isValidEan(c) || (c.length === 14 && isValidEan(c.slice(0, 13)));
+
 function codeFits(code: string, opts: Z2Options): boolean {
-  if (opts.code === 'ean') return code.length >= 12 && code.length <= 14;
+  if (opts.code === 'ean') return code.length === 8 || (code.length >= 12 && code.length <= 14);
   if (opts.codeLength) return Math.abs(code.length - opts.codeLength) <= 1;
   return code.length >= 5 && code.length <= 14;
+}
+
+interface NumCell { num: string; unit?: string }
+
+/** Ячейка с числом (возможно, с единицей после: «12 бут», «1 кор.»); иначе undefined */
+export function parseNumCell(raw: string): NumCell | undefined {
+  let t = raw.replace(JUNK_RE, ' ').replace(/(^|\s)-+|-+(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
+  let unit: string | undefined;
+  const um = t.match(TRAILING_UNIT_RE);
+  if (um && um.index !== undefined && /\d/.test(t.slice(0, um.index))) {
+    unit = um[1];
+    t = t.slice(0, um.index).trim();
+  }
+  t = fixDigits(t);
+  if (!/^[\d\s.,]+$/.test(t) || !/\d/.test(t)) return undefined;
+  // длинные коды (NTIN, ТН ВЭД, штрихкоды) — не количества и не суммы
+  if (t.split(/\s+/).some((x) => x.replace(/\D/g, '').length >= 10)) return undefined;
+  return { num: t, unit };
+}
+
+/** Варианты прочтения числа из ячейки с учётом типичных ошибок OCR */
+export function readValues(text: string | undefined, role: Role): number[] {
+  if (!text) return [];
+  const t = text.trim();
+  // «5 472» — целое с пробелом-разделителем тысяч (накладные без копеек)
+  if (/^\d{1,3}(?: \d{3})+$/.test(t)) return [Number(t.replace(/ /g, ''))];
+  const toks = extractNumbers(t);
+  if (!toks.length) return [];
+  const tok = toks.reduce((x, y) => (y.text.length > x.text.length ? y : x));
+  if (role === 'qty' || role === 'qtyPlan') {
+    const v = [tok.value];
+    // «5,000» (три знака после запятой) OCR читает как «5000»
+    if (!tok.hasDecimals && /000$/.test(tok.text) && tok.text.length >= 4) v.push(tok.value / 1000);
+    return v;
+  }
+  return amountVariants(tok);
 }
 
 interface Anchor {
@@ -50,101 +100,351 @@ interface Anchor {
   stripCode?: string;
 }
 
-function findAnchors(words: Word[], opts: Z2Options, lineH: number): Anchor[] {
+type Cell = { words: Word[]; text: string; x0: number; x1: number; cy: number; num?: NumCell };
+
+function toCell(c: Word[]): Cell {
+  const text = cellText(c);
+  return { words: c, text, x0: Math.min(...c.map((w) => w.x0)), x1: cellX1(c), cy: cellCy(c), num: parseNumCell(text) };
+}
+
+function makeCells(ws: Word[], gap: number): Cell[] {
+  // Ячейки собираем в пределах одной строки OCR: иначе при изгибе листа слова соседних строк слипаются
+  const byLine = new Map<number, Word[]>();
+  for (const w of ws) byLine.set(w.line, [...(byLine.get(w.line) ?? []), w]);
+  return [...byLine.values()].flatMap((line) => mergeThousands(groupCells(line, gap), gap)).map(toCell).sort((a, b) => a.x0 - b.x0);
+}
+
+/** «11 136,00»: пробел-разделитель тысяч шире обычного промежутка между словами ячейки */
+function mergeThousands(groups: Word[][], gap: number): Word[][] {
+  for (let i = 0; i < groups.length - 1; i++) {
+    const a = groups[i], b = groups[i + 1];
+    const ta = cellText(a).replace(JUNK_RE, '').trim(), tb = cellText(b).replace(JUNK_RE, '').trim();
+    if (/^\d{1,3}$/.test(ta) && /^\d{3}(?:[.,]\d{1,3})?[.,-]?$/.test(tb) && b[0].x0 - cellX1(a) <= gap * 1.9) {
+      groups.splice(i, 2, [...a, ...b]);
+      i--;
+    }
+  }
+  return groups;
+}
+
+function dedupeByY<T extends { cy: number }>(list: T[], lineH: number): T[] {
+  const s = [...list].sort((a, b) => a.cy - b.cy);
+  return s.filter((a, i) => i === 0 || Math.abs(a.cy - s[i - 1].cy) > lineH * 0.4);
+}
+
+/** Якоря по столбцу кодов: самый населённый (для EAN — с наибольшим числом верных контрольных цифр) */
+function findCodeAnchors(words: Word[], opts: Z2Options, lineH: number): Anchor[] {
   const cands: Anchor[] = [];
   for (const w of words) {
     const code = cleanCode(w.text);
     if (code && codeFits(code, opts)) cands.push({ word: w, code, cy: w.cy, x0: w.x0, x1: w.x1 });
   }
   if (!cands.length) return [];
-  // Самый населённый столбец по левому краю
   const cl = cluster1d(cands.map((c) => c.x0), lineH * 2);
-  const best = cl.reduce((a, b) => (b.count > a.count ? b : a));
-  const lo = best.members[0] - lineH, hi = best.members[best.members.length - 1] + lineH;
-  let res = cands.filter((c) => c.x0 >= lo && c.x0 <= hi);
+  const inRange = (m: number[]) => cands.filter((c) => c.x0 >= m[0] && c.x0 <= m[m.length - 1]);
+  const score = (m: number[]) => {
+    const list = inRange(m);
+    return opts.code === 'ean' ? list.filter((c) => eanLike(c.code)).length * 3 + list.length : list.length;
+  };
+  const best = cl.reduce((a, b) => (score(b.members) > score(a.members) ? b : a));
+  let res = inRange(best.members);
   // Для кодов поставщика — оставляем самую частую длину (±1)
   if (opts.code === 'digits' && !opts.codeLength) {
     const len = median(res.map((c) => c.code.length));
     res = res.filter((c) => Math.abs(c.code.length - len) <= 1);
   }
-  res.sort((a, b) => a.cy - b.cy);
   // Дубликаты (одно слово попало в две строки OCR)
-  return res.filter((a, i) => i === 0 || Math.abs(a.cy - res[i - 1].cy) > lineH * 0.4);
+  return dedupeByY(res, lineH);
 }
 
-function findTotalsLine(words: Word[], afterY: number, lineH: number): Word[] | undefined {
-  const w = words.find((x) => x.cy > afterY && x.cy < afterY + lineH * 4 && /[иИuU][тТt][оoОO][гГr]/.test(x.text));
-  if (!w) return undefined;
-  return words.filter((x) => Math.abs(x.cy - w.cy) < (w.y1 - w.y0) * 0.8 && x.x0 > w.x0);
+/** Накладная без кодов: якорь — самый правый из самых заполненных столбцов чисел */
+function findNumericAnchors(page: OcrPage, words: Word[], lineH: number): Anchor[] {
+  const byLine = new Map<number, Word[]>();
+  for (const w of words) byLine.set(w.line, [...(byLine.get(w.line) ?? []), w]);
+  const cells: Cell[] = [];
+  for (const ws of byLine.values()) for (const c of makeCells(ws, lineH * 0.7)) if (c.num && c.x1 > page.width * 0.4) cells.push(c);
+  if (!cells.length) return [];
+  const cl = cluster1d(cells.map((c) => c.x1), lineH * 1.5);
+  const maxCount = Math.max(...cl.map((c) => c.count));
+  const col = cl.filter((c) => c.count >= maxCount * 0.8).sort((a, b) => b.center - a.center)[0];
+  const lo = col.members[0], hi = col.members[col.members.length - 1];
+  const members = cells.filter((c) => c.x1 >= lo && c.x1 <= hi);
+  return dedupeByY(members.map((c) => ({ cy: c.cy, x0: c.x0, x1: c.x1, code: '', word: c.words[0] })), lineH);
 }
 
-type Cell = { cell: Word[]; text: string; x0: number; x1: number; cy: number };
+/** Строка «Итого»: первое слово «Итог…» ниже начала таблицы */
+function findTotalsWord(words: Word[], afterY: number): Word | undefined {
+  return words
+    // «ИТОГ» OCR читает и как «УТогГ», «ЙТОГ»
+    .filter((x) => x.cy > afterY && /^[^A-Za-zА-Яа-я]{0,2}[иИuUуУйЙ][тТt][оoОO][гГr]/.test(x.text))
+    .sort((a, b) => a.cy - b.cy)[0];
+}
 
-/** Общий анализ страницы — нужен и для плана второго прохода, и для разбора */
-function analyze(page: OcrPage, opts: Z2Options) {
-  const words = flattenWords(page);
-  const lineH = typicalLineHeight(words, page);
-  const anchors = findAnchors(words, opts, lineH);
-  const cellGap = lineH * 0.7;
-  const toCells = (ws: Word[]): Cell[] =>
-    groupCells(ws, cellGap).map((c) => ({ cell: c, text: fixDigits(cellText(c)), x0: Math.min(...c.map((w) => w.x0)), x1: cellX1(c), cy: cellCy(c) }));
-  if (!anchors.length) return { words, lineH, anchors, toCells, cols: [], roles: [] as Role[], bands: [], lineCells: [], bandCells: [], pitch: lineH, totalsWords: undefined };
+/** Строка нумерации столбцов под шапкой: «1 2 3 4 5 6 7 8 9» */
+function isColumnNumbering(cells: Cell[]): boolean {
+  const vals = cells.filter((c) => c.num).map((c) => Number(c.num!.num.replace(/\s/g, ''))).filter((v) => Number.isFinite(v));
+  if (vals.length < 3) return false;
+  let inc = 0;
+  for (let i = 1; i < vals.length; i++) if (vals[i] === vals[i - 1] + 1) inc++;
+  return vals.every((v) => Number.isInteger(v) && v < 20) && inc >= vals.length - 2;
+}
 
-  const pitch = anchors.length > 1 ? median(anchors.slice(1).map((a, i) => a.cy - anchors[i].cy)) : lineH * 1.5;
-  const lastY = anchors[anchors.length - 1].cy;
-  const totalsWords = findTotalsLine(words, lastY - lineH, lineH);
-  const totalsTop = totalsWords?.length ? Math.min(...totalsWords.map((w) => w.cy)) - lineH * 0.45 : Infinity;
+interface Band { top: number; bottom: number }
 
-  const bands = anchors.map((a, i) => {
+/** Полосы строк для чисел в зависимости от раскладки */
+function numberBands(anchors: Anchor[], opts: Z2Options, lineH: number, pitch: number, totalsTop: number): Band[] {
+  const align = opts.rowAlign ?? 'center';
+  return anchors.map((a, i) => {
     const prev = anchors[i - 1]?.cy, next = anchors[i + 1]?.cy;
-    const top = prev !== undefined ? (prev + a.cy) / 2 : a.cy - pitch * 0.6;
-    // У последней строки числа не ниже кода (ниже — уже «Итого»)
+    if (align === 'top') {
+      const bottom = next !== undefined ? next - lineH * 0.6 : Math.min(a.cy + Math.max(pitch, lineH * 3), totalsTop);
+      return { top: a.cy - lineH * 0.6, bottom };
+    }
+    if (align === 'bottom') {
+      return { top: prev !== undefined ? prev + lineH * 0.6 : a.cy - lineH * 1.5, bottom: Math.min(a.cy + lineH * 0.6, totalsTop) };
+    }
+    // У первой строки числа не выше кода (выше — шапка и нумерация столбцов), у последней — не ниже («Итого»)
+    const top = prev !== undefined ? (prev + a.cy) / 2 : a.cy - Math.min(pitch * 0.6, lineH);
     const bottom = next !== undefined ? (next + a.cy) / 2 : Math.min(a.cy + lineH * 0.6, Math.max(a.cy + lineH * 0.3, totalsTop));
     return { top, bottom };
   });
-
-  const lineCells = anchors.map((a) => (a.word ? toCells(words.filter((w) => w.line === a.word!.line && w.x0 > a.x1 + lineH * 0.3)) : []));
-  const bandCells = anchors.map((a, i) => {
-    const b = bands[i];
-    return toCells(words.filter((w) => w.cy > b.top && w.cy <= b.bottom && w.x0 > a.x1 + lineH * 0.3));
-  });
-
-  // Столбцы чисел: кластеры правого края числовых ячеек
-  const numericCells: Cell[] = [];
-  for (const cells of bandCells) for (const c of cells) if (extractNumbers(c.text).length) numericCells.push(c);
-  const colTol = lineH * 1.5;
-  let cols = cluster1d(numericCells.map((c) => c.x1), colTol).filter((c) => c.count >= Math.max(2, anchors.length * 0.3));
-  cols.sort((a, b) => a.center - b.center);
-  // Нужны 5 столбцов: подлежит, отпущено, цена, сумма, НДС. Берём 5 самых правых.
-  if (cols.length > 5) cols = cols.slice(cols.length - 5);
-  const roles = ROLE_NAMES.slice(5 - cols.length) as unknown as Role[];
-  // Левые границы столбцов (для полос второго прохода)
-  const colsX = cols.map((c) => {
-    const members = numericCells.filter((x) => Math.abs(x.x1 - c.center) <= colTol);
-    const x0s = members.map((m) => m.x0).sort((a, b) => a - b);
-    return { center: c.center, x0: x0s[Math.floor(x0s.length * 0.1)] ?? c.center - lineH * 4, x1: Math.max(...members.map((m) => m.x1)) };
-  });
-  return { words, lineH, anchors, toCells, cols: colsX, roles, bands, lineCells, bandCells, pitch, totalsWords };
 }
+
+/** Полоса наименования: куда переносится длинное название относительно строки с кодом */
+function nameBand(anchors: Anchor[], i: number, opts: Z2Options, lineH: number, numBand: Band, pitch: number): Band {
+  const a = anchors[i], prev = anchors[i - 1]?.cy, next = anchors[i + 1]?.cy;
+  const half = lineH * 0.5;
+  if (opts.nameDir === 'up') return { top: prev !== undefined ? prev + half : a.cy - lineH * 2.6, bottom: a.cy + half };
+  if (opts.nameDir === 'down') return { top: a.cy - half, bottom: next !== undefined ? next - half : Math.min(a.cy + lineH * 1.8, numBand.bottom + half) };
+  // Название по центру строки: у крайних строк — на полшага вверх/вниз (многострочные названия)
+  return {
+    top: prev !== undefined ? numBand.top : a.cy - pitch * 0.5,
+    bottom: next !== undefined ? numBand.bottom : Math.max(numBand.bottom, a.cy + Math.min(pitch * 0.5, lineH * 2)),
+  };
+}
+
+/** Числа строки по столбцам: для каждого столбца — ближайшая по правому краю ячейка */
+function cellsByColumn(cells: Cell[], cols: { center: number }[], colTol: number): (Cell | undefined)[] {
+  return cols.map((c) => {
+    const inCol = cells.filter((x) => x.num && Math.abs(x.x1 - c.center) <= colTol);
+    if (!inCol.length) return undefined;
+    return inCol.reduce((p, q) => (Math.abs(q.x1 - c.center) < Math.abs(p.x1 - c.center) ? q : p));
+  });
+}
+
+const sumTol = (q: number) => Math.max(0.02, q * 0.005 + 0.01);
+
+/**
+ * Роли столбцов по арифметике строк: ищем тройку столбцов (кол-во, цена, сумма),
+ * для которой q × p = s выполняется в наибольшем числе строк. Затем НДС (правее суммы)
+ * и «подлежит отпуску» (столбец, совпадающий с количеством). Остальные — лишние.
+ */
+function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
+  const votes = new Map<string, number>();
+  for (const row of rows) {
+    const seen = new Set<string>();
+    for (let i = 0; i < nCols; i++) for (let j = i + 1; j < nCols; j++) for (let l = j + 1; l < nCols; l++) {
+      if (row[i].some((q) => q > 0 && row[j].some((p) => p > 0 && row[l].some((s) => Math.abs(q * p - s) <= sumTol(q))))) seen.add(`${i},${j},${l}`);
+    }
+    for (const k of seen) votes.set(k, (votes.get(k) ?? 0) + 1);
+  }
+  let best: number[] | undefined, bestVotes = 0;
+  for (const [k, v] of votes) {
+    const t = k.split(',').map(Number);
+    // при равенстве — правее: «Отпущено» правее «Подлежит», цена со скидкой правее цены по прайсу
+    if (v > bestVotes || (v === bestVotes && best && (t[2] > best[2] || (t[2] === best[2] && (t[1] > best[1] || (t[1] === best[1] && t[0] > best[0])))))) {
+      best = t;
+      bestVotes = v;
+    }
+  }
+  const filled = rows.filter((r) => r.filter((x) => x.length).length >= 3).length;
+  if (!best || bestVotes < Math.min(2, Math.max(1, filled))) return undefined;
+  const [qi, pi, si] = best;
+  const roles: ColRole[] = new Array(nCols).fill('skip');
+  roles[qi] = 'qty';
+  roles[pi] = 'price';
+  roles[si] = 'sum';
+  const rowOk = (row: number[][]) => row[qi].some((q) => row[pi].some((p) => row[si].some((s) => Math.abs(q * p - s) <= sumTol(q))));
+  const good = rows.filter(rowOk);
+  // НДС: правее суммы, v ≈ s × 16/116 (или 12/112 для старых накладных)
+  let vatCol = -1, vatVotes = 0;
+  for (let m = si + 1; m < nCols; m++) {
+    const n = good.filter((row) => row[m].some((v) => row[si].some((s) => [0.16, 0.12].some((r) => near(v, round2((s * r) / (1 + r)), 0.03))))).length;
+    if (n > vatVotes) { vatVotes = n; vatCol = m; }
+  }
+  if (vatCol >= 0 && vatVotes >= Math.max(1, good.length * 0.3)) roles[vatCol] = 'vat';
+  // «Подлежит отпуску»: столбец рядом с количеством с теми же значениями
+  let planCol = -1, planVotes = 0;
+  for (let c = 0; c < pi; c++) {
+    if (c === qi) continue;
+    const n = good.filter((row) => row[c].some((v) => row[qi].some((q) => near(v, q, 0.0001)))).length;
+    if (n > planVotes || (n === planVotes && planCol >= 0 && Math.abs(c - qi) < Math.abs(planCol - qi))) { planVotes = n; planCol = c; }
+  }
+  if (planCol >= 0 && planVotes >= Math.max(1, good.length * 0.5)) roles[planCol] = 'qtyPlan';
+  return roles;
+}
+
+/**
+ * Общий анализ страницы — нужен и для плана второго прохода, и для разбора.
+ * stripCodes — коды из второго прохода: уточняют прочтение и добавляют пропущенные строки.
+ */
+function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code: string }[] = []) {
+  const words = flattenWords(page);
+  const lineH = typicalLineHeight(words, page);
+  const cellGap = lineH * 0.7;
+  let anchors = opts.code === 'none' ? findNumericAnchors(page, words, lineH) : findCodeAnchors(words, opts, lineH);
+  if (stripCodes.length && anchors.length) {
+    const ref = anchors[0];
+    const extra: Anchor[] = [];
+    for (const s of stripCodes) {
+      const own = anchors.find((x) => Math.abs(x.cy - s.cy) < lineH * 0.6);
+      if (own) own.stripCode ??= s.code;
+      else if (!extra.some((x) => Math.abs(x.cy - s.cy) < lineH * 0.6)) extra.push({ cy: s.cy, x0: ref.x0, x1: ref.x1, code: s.code, stripCode: s.code });
+    }
+    anchors = dedupeByY([...anchors, ...extra], lineH);
+  }
+  const empty = {
+    words, lineH, anchors, cols: [] as ColX[], roles: [] as ColRole[], numBands: [] as Band[], bandCells: [] as Cell[][],
+    pitch: lineH, totalsWords: undefined as Word[] | undefined, numbersLeft: 0, codeCol: { x0: 0, x1: 0 }, cellGap,
+    unitCol: undefined as { x0: number; x1: number } | undefined,
+  };
+  if (!anchors.length) return empty;
+
+  // «Итого» ограничивает таблицу снизу (для накладных без кодов в столбце чисел есть и строка итога)
+  const totalsWord = findTotalsWord(words, anchors[0].cy + lineH * 0.3);
+  if (totalsWord) anchors = anchors.filter((a) => a.cy < totalsWord.cy - lineH * 0.4);
+  if (!anchors.length) return { ...empty, anchors };
+  const totalsWords = totalsWord ? words.filter((x) => Math.abs(x.cy - totalsWord.cy) < (totalsWord.y1 - totalsWord.y0) * 0.8 && x.x0 > totalsWord.x0) : undefined;
+  const totalsTop = totalsWord ? totalsWord.cy - lineH * 0.45 : Infinity;
+
+  // Граница, правее которой ищем числа строки
+  const codeFirst = anchors.filter((a) => a.code);
+  const codeCol = codeFirst.length
+    ? { x0: Math.min(...codeFirst.map((a) => a.x0)), x1: median(codeFirst.map((a) => a.x1)) }
+    : { x0: 0, x1: 0 };
+  const colTol = lineH * 1.5;
+
+  const build = (rows: Anchor[]) => {
+    const pitch = rows.length > 1 ? median(rows.slice(1).map((a, i) => a.cy - rows[i].cy)) : lineH * 1.5;
+    const bands = numberBands(rows, opts, lineH, pitch, totalsTop);
+    let numbersLeft = codeCol.x1 + lineH * 0.3;
+    if (opts.code === 'none') {
+      // правее начала наименований (левее — столбец №)
+      const starts = bands.map((b) => {
+        const alpha = words.filter((w) => w.cy > b.top && w.cy <= b.bottom && /[A-Za-zА-Яа-яЁё]{2,}/.test(w.text));
+        return alpha.length ? Math.min(...alpha.map((w) => w.x0)) : NaN;
+      }).filter((x) => Number.isFinite(x));
+      numbersLeft = starts.length ? median(starts) : page.width * 0.2;
+    }
+    const bandCells = bands.map((b) => {
+      const cells = makeCells(words.filter((w) => w.cy > b.top && w.cy <= b.bottom && w.x0 > numbersLeft), cellGap);
+      // строка нумерации столбцов «1 2 3 … 9» под шапкой не должна попасть в первую строку товара
+      const numbering = new Set<number>();
+      for (const line of new Set(cells.map((c) => c.words[0].line))) {
+        if (isColumnNumbering(cells.filter((c) => c.words[0].line === line))) numbering.add(line);
+      }
+      return numbering.size ? cells.filter((c) => !numbering.has(c.words[0].line)) : cells;
+    });
+    // Числа на одной линии OCR с кодом — самое надёжное прочтение (если раскладка «по центру»)
+    const lineCells = rows.map((a) => ((opts.rowAlign ?? 'center') === 'center' && a.word
+      ? makeCells(words.filter((w) => w.line === a.word!.line && w.x0 > numbersLeft), cellGap)
+      : []));
+    // Ячейки строки: сначала с линии кода, затем остальные из полосы (без дублей)
+    const rowCells = rows.map((_, i) => {
+      const own = new Set(lineCells[i].flatMap((c) => c.words));
+      return [...lineCells[i], ...bandCells[i].filter((c) => !c.words.some((w) => own.has(w)))];
+    });
+
+    // Столбцы чисел: кластеры правого края числовых ячеек
+    const numericCells = rowCells.flat().filter((c) => c.num);
+    const clusters = cluster1d(numericCells.map((c) => c.x1), colTol)
+      .filter((c) => c.count >= Math.max(2, rows.length * 0.3))
+      .sort((a, b) => a.center - b.center);
+    const cols: ColX[] = clusters.map((c, ci) => {
+      // слово-мусор с огромной рамкой (печать, линия) не должно раздвигать столбец
+      const members = numericCells.filter((x) => Math.abs(x.x1 - c.center) <= colTol && x.x1 - x.x0 < lineH * 6);
+      const x0s = members.map((m) => m.x0).sort((a, b) => a - b);
+      const prevCenter = ci > 0 ? clusters[ci - 1].center : -Infinity;
+      const x0 = Math.max(x0s[Math.floor(x0s.length * 0.1)] ?? c.center - lineH * 4, prevCenter + lineH * 0.5);
+      return { center: c.center, x0, x1: Math.max(c.center, ...members.map((m) => m.x1)) };
+    });
+
+    // Роли столбцов: по арифметике, иначе — как в стандартной З-2 (5 самых правых)
+    const readAny = (t: string) => [...new Set([...readValues(t, 'qty'), ...readValues(t, 'price')])];
+    const byCol = rowCells.map((cells) => cellsByColumn(cells, cols, colTol));
+    const values = byCol.map((cs) => cs.map((c) => (c ? readAny(c.num!.num) : [])));
+    let roles = detectRoles(values, cols.length);
+    if (!roles) {
+      const n = Math.min(5, cols.length);
+      roles = cols.map((_, i) => (i < cols.length - n ? 'skip' : LEGACY_ROLES[5 - n + (i - (cols.length - n))]));
+    }
+    const roleValues = byCol.map((cs) => cs.filter((c, ci) => c && roles![ci] !== 'skip').length);
+    return { rows, pitch, bands, numbersLeft, rowCells, cols, roles, roleValues };
+  };
+
+  let b = build(anchors);
+  if (opts.code === 'none') {
+    // Без кодов якорями могут оказаться шапка (нумерация столбцов, реквизиты) — оставляем строки,
+    // где заполнены хотя бы два столбца с ролью, и пересчитываем столбцы уже по ним
+    const keep = b.rows.filter((_, i) => b.roleValues[i] >= 2 && !isColumnNumbering(b.rowCells[i]));
+    if (!keep.length) return { ...empty, anchors: keep };
+    if (keep.length !== b.rows.length) b = build(keep);
+  }
+  const { rows, pitch, bands, numbersLeft, rowCells, cols, roles } = b;
+  const unitCol = findUnitColumn(rowCells, cols, roles, rows.length, lineH);
+  return { words, lineH, anchors: rows, cols, roles, numBands: bands, bandCells: rowCells, pitch, totalsWords, numbersLeft, codeCol, cellGap, unitCol };
+}
+
+/** Левый край чисел строки (столбцы с ролями) */
+const rolesLeft = (cols: ColX[], roles: ColRole[]) => Math.min(Infinity, ...cols.filter((_, i) => roles[i] !== 'skip').map((c) => c.x0));
+
+/** Столбец «Ед. изм.»: короткие слова левее чисел, стоящие друг под другом */
+function findUnitColumn(rowCells: Cell[][], cols: ColX[], roles: ColRole[], rows: number, lineH: number): { x0: number; x1: number } | undefined {
+  const left = rolesLeft(cols, roles);
+  const short = rowCells.flat().filter((c) => !c.num && c.x1 < left - lineH * 0.3 && /^[A-Za-zА-Яа-яЁё.]{1,6}$/.test(c.text.replace(JUNK_RE, '').trim()));
+  if (!short.length) return undefined;
+  const cx = (c: Cell) => (c.x0 + c.x1) / 2;
+  const cl = cluster1d(short.map(cx), lineH * 1.5).filter((c) => c.count >= Math.max(2, rows * 0.3));
+  if (!cl.length) return undefined;
+  const members = (c: { members: number[] }) => short.filter((s) => cx(s) >= c.members[0] && cx(s) <= c.members[c.members.length - 1]);
+  const score = (c: { members: number[] }) => members(c).reduce((a, s) => a + (UNIT_CELL_RE.test(s.text.replace(JUNK_RE, '').trim()) ? 3 : 1), 0);
+  const best = cl.reduce((p, q) => (score(q) > score(p) || (score(q) === score(p) && q.center > p.center) ? q : p));
+  const m = members(best);
+  return { x0: Math.min(...m.map((c) => c.x0)), x1: Math.max(...m.map((c) => c.x1)) };
+}
+
+/** Буквы единиц измерения для второго прохода по столбцу «Ед. изм.» */
+const UNIT_LETTERS = 'шткгблоупачрнШТКГБЛОУПАЧРН.';
+
+interface ColX { center: number; x0: number; x1: number }
 
 /** План второго прохода: полоса кодов и полосы числовых столбцов */
 export function planZ2Strips(page: OcrPage, opts: Z2Options): StripPlan[] {
   const a = analyze(page, opts);
-  if (a.anchors.length < 2 || a.cols.length < 3) return [];
+  const used = a.roles.map((r, i) => ({ r, i })).filter((x) => x.r !== 'skip');
+  if (a.anchors.length < 2 || used.length < 2) return [];
   const { lineH, anchors, cols } = a;
-  const top = anchors[0].cy - a.pitch * 0.7;
+  // запас сверху на целую строку: первую строку товара первый проход часто теряет (она прижата к шапке)
+  const top = anchors[0].cy - Math.max(a.pitch * 1.3, lineH * 2.5) - (opts.rowAlign === 'bottom' ? lineH * 2 : 0);
   // запас снизу: последняя строка могла не найтись в первом проходе + строка «Итого»
-  const bottom = anchors[anchors.length - 1].cy + Math.max(lineH * 4.5, a.pitch * 2.5);
+  const bottom = anchors[anchors.length - 1].cy + Math.max(lineH * 4.5, a.pitch * 2.5) + (opts.rowAlign === 'top' ? lineH * 3 : 0);
   const plans: StripPlan[] = [];
-  const cx0 = median(anchors.map((x) => x.x0)), cx1 = median(anchors.map((x) => x.x1));
-  plans.push({ role: 'code', x0: cx0 - lineH, x1: cx1 + lineH, y0: top, y1: bottom, whitelist: '0123456789' });
-  cols.forEach((c, i) => {
-    const prevRight = i > 0 ? cols[i - 1].x1 : cx1;
+  if (opts.code !== 'none') {
+    const coded = anchors.filter((x) => x.code);
+    const cx0 = Math.min(...coded.map((x) => x.x0)), cx1 = Math.max(...coded.map((x) => x.x1));
+    plans.push({ role: 'code', x0: cx0 - lineH * 0.4, x1: cx1 + lineH * 0.4, y0: top, y1: bottom, whitelist: '0123456789' });
+  }
+  for (const { r, i } of used) {
+    const c = cols[i];
+    const prevRight = i > 0 ? cols[i - 1].x1 : Math.max(a.numbersLeft, a.codeCol.x1);
     const x0 = Math.max(prevRight + lineH * 0.3, c.x0 - lineH * 1.2);
     const nextLeft = i < cols.length - 1 ? cols[i + 1].x0 : page.width;
-    const x1 = Math.min(nextLeft - lineH * 0.3, c.x1 + lineH * 0.8);
-    plans.push({ role: a.roles[i], x0, x1, y0: top, y1: bottom, whitelist: '0123456789,. ' });
-  });
+    let x1 = Math.min(nextLeft - lineH * 0.3, c.x1 + lineH * 0.8);
+    if (x1 < c.center + lineH * 0.3) x1 = c.center + lineH * 0.6;
+    plans.push({ role: r, x0, x1, y0: top, y1: bottom, whitelist: '0123456789,. ' });
+  }
+  // «wr», «un», «xr» — так OCR читает «шт» и «кг»; с фильтром букв единица читается уверенно
+  if (a.unitCol) plans.push({ role: 'unit', x0: a.unitCol.x0 - lineH * 0.4, x1: a.unitCol.x1 + lineH * 0.4, y0: top, y1: bottom, whitelist: UNIT_LETTERS });
   return plans;
 }
 
@@ -194,118 +494,146 @@ function stripLines(strip?: OcrStrip): StripLine[] {
     .sort((a, b) => a.cy - b.cy);
 }
 
+/** Код из строки полосы: подходящий по длине фрагмент (соседний столбец мог попасть в полосу) */
+function stripCode(text: string, opts: Z2Options): string | undefined {
+  let parts = text.split(/\s+/).map((p) => p.replace(/\D/g, '')).filter(Boolean);
+  // в полосу попал № строки: «2103112» = 2 + 103112
+  const len = opts.codeLength;
+  if (len) parts = parts.map((p) => (p.length > len && p.length <= len + 2 ? p.slice(-len) : p));
+  const fits = parts.filter((p) => codeFits(p, opts));
+  if (opts.code === 'ean') return fits.find(eanLike) ?? fits.sort((x, y) => y.length - x.length)[0];
+  if (fits.length) return fits.sort((x, y) => y.length - x.length)[0];
+  const joined = parts.join('');
+  return codeFits(joined, opts) ? joined : undefined;
+}
+
 export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
   const doc: ParsedDoc = { format: 'z2', formatName: 'Накладная З-2', items: [], issues: [] };
-  const a = analyze(page, opts);
-  const { words, lineH, toCells, cols, roles, bands, lineCells, bandCells, totalsWords } = a;
-  const anchors = [...a.anchors];
   const stripOf = (role: string) => page.strips?.find((s) => s.role === role);
 
-  // Коды из второго прохода: уточняют прочтение и добавляют пропущенные строки
-  const codeStrip = stripLines(stripOf('code'));
-  for (const l of codeStrip) {
-    const code = l.text.replace(/\D/g, '');
-    if (!codeFits(code, opts)) continue;
-    const near1 = anchors.find((x) => Math.abs(x.cy - l.cy) < lineH * 0.6);
-    if (near1) near1.stripCode = code;
-    else if (anchors.length) {
-      const ref = anchors[0];
-      anchors.push({ cy: l.cy, x0: ref.x0, x1: ref.x1, code, stripCode: code });
-    }
-  }
-  anchors.sort((x, y) => x.cy - y.cy);
+  const stripCodes = opts.code === 'none' ? [] : stripLines(stripOf('code'))
+    .map((l) => ({ cy: l.cy, code: stripCode(l.text, opts) }))
+    .filter((x): x is { cy: number; code: string } => !!x.code);
+  const a = analyze(page, opts, stripCodes);
+  const { words, lineH, anchors, cols, roles, numBands, bandCells, totalsWords, cellGap } = a;
+  // строки далеко друг от друга (многострочные названия) — лист сильнее «плывёт», допуск шире
+  const alignTol = Math.max(lineH * 0.65, a.pitch * 0.3);
   if (!anchors.length) {
-    doc.issues.push(issue('error', 'Не найдены строки товаров (столбец «Номенклатурный номер»)'));
+    doc.issues.push(issue('error', opts.code === 'none'
+      ? 'Не найдены строки товаров'
+      : 'Не найдены строки товаров (столбец «Номенклатурный номер»)'));
     return doc;
   }
-  if (cols.length < 4) doc.issues.push(issue('warn', `Найдено только ${cols.length} столбцов с числами из 5 — часть значений может отсутствовать`));
+  const usedRoles = roles.filter((r) => r !== 'skip') as Role[];
+  if (!usedRoles.includes('qty') || !usedRoles.includes('sum')) {
+    doc.issues.push(issue('warn', `Не удалось определить столбцы количества и суммы — часть значений может отсутствовать`));
+  }
 
   const colTol = lineH * 1.5;
-  const inColumn = (cells: Cell[], colIdx: number) => {
-    const c = cols[colIdx];
-    const inCol = cells.filter((x) => Math.abs(x.x1 - c.center) <= colTol && extractNumbers(x.text).length);
-    if (!inCol.length) return undefined;
-    return inCol.reduce((p, q) => (Math.abs(q.x1 - c.center) < Math.abs(p.x1 - c.center) ? q : p));
-  };
-  // Индексы якорей первого прохода (у добавленных из полосы своих ячеек нет)
-  const firstPassIdx = (anc: Anchor) => a.anchors.indexOf(anc);
-  const claimed = new Set<Word>();
-  lineCells.forEach((cells) => cols.forEach((_, ci) => inColumn(cells, ci)?.cell.forEach((w) => claimed.add(w))));
-  const pickCol = (anc: Anchor, colIdx: number) => {
-    const i = firstPassIdx(anc);
-    if (i < 0) return undefined;
-    const own = inColumn(lineCells[i], colIdx);
-    if (own) return own;
-    return inColumn(bandCells[i].filter((c) => !c.cell.some((w) => claimed.has(w))), colIdx);
-  };
+  const rowCols = bandCells.map((cells) => cellsByColumn(cells, cols, colTol));
+  const colOf = (role: Role) => roles.indexOf(role);
+
+  // Где на самом деле стоят числа строки (у некоторых поставщиков — ниже или выше кода)
+  const rowY = anchors.map((_, k) => {
+    const ys = rowCols[k].filter((c, ci) => c && roles[ci] !== 'skip').map((c) => c!.cy);
+    return ys.length ? median(ys) : undefined;
+  });
+  const known = rowY.map((y, k) => (y === undefined ? undefined : y - anchors[k].cy)).filter((x): x is number => x !== undefined);
+  const offset = known.length ? median(known) : 0;
+  const expectY = anchors.map((x, k) => rowY[k] ?? x.cy + offset);
 
   // Прочтения второго прохода. Строки полосы и строки таблицы идут в одном порядке,
-  // поэтому сопоставляем их выравниванием последовательностей с общим смещением
-  // столбца (числа бывают чуть выше кода: перенос названия, изгиб листа).
-  const stripReads = new Map<Anchor, Map<Role, string>>();
+  // поэтому сопоставляем их выравниванием последовательностей; оставшиеся — по полосе строки.
+  const stripReads = anchors.map(() => new Map<Role, string>());
   const stripTotals = new Map<Role, string>();
-  const anchorYs = anchors.map((x) => x.cy);
-  roles.forEach((role) => {
+  for (const role of usedRoles) {
     const lines = stripLines(stripOf(role));
-    if (!lines.length) return;
-    const match = alignSequences(anchorYs, lines.map((l) => l.cy), lineH * 0.65);
+    if (!lines.length) continue;
+    const match = alignSequences(expectY, lines.map((l) => l.cy), alignTol);
     match.forEach((li, k) => {
       if (li < 0) return;
       lines[li].used = true;
-      if (!stripReads.has(anchors[k])) stripReads.set(anchors[k], new Map());
-      stripReads.get(anchors[k])!.set(role, lines[li].text);
+      stripReads[k].set(role, lines[li].text);
     });
-    // Итог — первая строка полосы ниже последней сопоставленной
-    const lastIdx = Math.max(-1, ...match);
-    const lastY = lastIdx >= 0 ? lines[lastIdx].cy : anchorYs[anchorYs.length - 1];
-    const tot = lines.find((l, i) => i > lastIdx && l.cy > lastY + lineH * 0.5 && l.cy < lastY + lineH * 3.5);
+    anchors.forEach((_, k) => {
+      if (match[k] >= 0) return;
+      const b = numBands[k];
+      const cand = lines.filter((l) => !l.used && l.cy > b.top && l.cy <= b.bottom)
+        .sort((x, y) => Math.abs(x.cy - expectY[k]) - Math.abs(y.cy - expectY[k]))[0];
+      if (cand) { cand.used = true; stripReads[k].set(role, cand.text); }
+    });
+    // Итог — первая строка полосы ниже последней строки таблицы
+    const lastY = Math.max(...lines.filter((l) => l.used).map((l) => l.cy), expectY[expectY.length - 1]);
+    const tot = lines.find((l) => !l.used && l.cy > lastY + lineH * 0.5 && l.cy < lastY + lineH * 3.5);
     if (tot) stripTotals.set(role, tot.text);
-  });
+  }
+  // Единицы измерения из второго прохода (фильтр букв «шт», «кг», «блок»…)
+  const stripUnits: (string | undefined)[] = anchors.map(() => undefined);
+  // берём только целые слова («шт», «кг»): обрывки «к», «т» второй проход выдаёт и для «шт», и для «кг»
+  const unitLines = (stripOf('unit')?.lines ?? [])
+    .map((l) => ({ cy: (l.y0 + l.y1) / 2, text: l.text.replace(/[^А-Яа-яЁё]/g, ''), used: false }))
+    .filter((l) => /^(шт|кг|блок|бут|уп|упак|пач|пачка|кор|л|бан)$/i.test(l.text))
+    .sort((x, y) => x.cy - y.cy);
+  if (unitLines.length) {
+    const match = alignSequences(expectY, unitLines.map((l) => l.cy), alignTol);
+    match.forEach((li, k) => { if (li >= 0) { unitLines[li].used = true; stripUnits[k] = normalizeUnit(unitLines[li].text); } });
+    anchors.forEach((_, k) => {
+      if (stripUnits[k]) return;
+      const b = numBands[k];
+      const cand = unitLines.find((l) => !l.used && l.cy > b.top && l.cy <= b.bottom);
+      if (cand) { cand.used = true; stripUnits[k] = normalizeUnit(cand.text); }
+    });
+  }
 
-  const readValues = (text: string | undefined, role: Role): number[] => {
-    if (!text) return [];
-    const toks = extractNumbers(text);
-    if (!toks.length) return [];
-    const t = toks.reduce((x, y) => (y.text.length > x.text.length ? y : x));
-    return role.startsWith('qty') ? [t.value] : amountVariants(t);
-  };
+  const codeX0 = a.codeCol.x0;
+  const articleX0 = opts.code !== 'none' && (opts.nameSide ?? 'left') === 'left' ? findArticleColumn(words, anchors, codeX0, lineH) : undefined;
+  const numsLeftEdge = cols.length ? Math.min(...cols.filter((_, ci) => roles[ci] !== 'skip').map((c) => c.x0)) : Infinity;
 
-  const codeX0 = median(anchors.map((x) => x.x0));
   anchors.forEach((anc, i) => {
-    const fp = firstPassIdx(anc);
-    const cells = fp >= 0 ? bandCells[fp] : [];
+    const cells = bandCells[i];
     const numsOf = (role: Role) => {
-      const ci = roles.indexOf(role);
+      const ci = colOf(role);
       if (ci < 0) return [] as number[];
-      return [...readValues(pickCol(anc, ci)?.text, role), ...readValues(stripReads.get(anc)?.get(role), role)];
+      return [...readValues(rowCols[i][ci]?.num?.num, role), ...readValues(stripReads[i].get(role), role)];
     };
 
-    // Наименование: зона слева от кода. Направление переноса зависит от поставщика.
-    const prev = anchors[i - 1]?.cy, next = anchors[i + 1]?.cy;
-    const half = lineH * 0.5;
-    const nb = opts.nameDir === 'up'
-      ? { top: prev !== undefined ? prev + half : anc.cy - lineH * 2.6, bottom: anc.cy + half }
-      : opts.nameDir === 'down'
-        ? { top: anc.cy - half, bottom: next !== undefined ? next - half : anc.cy + lineH * 1.8 }
-        : fp >= 0 ? bands[fp] : { top: anc.cy - half, bottom: anc.cy + half };
-    const nameWords = words.filter((w) => w.cy > nb.top && w.cy <= nb.bottom && w.x1 <= anc.x0 + lineH * 0.2 && w.x0 < codeX0);
-    // отрезаем № п/п и мусор в начале строк названия
-    const mx = median(nameWords.map((x) => x.x0));
-    const nameClean = nameWords.filter((w) => !(/^[\W\d_]{0,4}$/.test(w.text) && w.x0 < mx));
-    let name = wordsToText(nameClean.filter((w) => /[A-Za-zА-Яа-яЁё0-9]/.test(w.text)), lineH)
-      .replace(/[`"'“”„«»°|_~^\\]/g, '')
-      .replace(/^[\s\-—–.,:;]+/, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    // Строки заголовка таблицы попадают в первую строку — отрезаем
-    name = name.replace(/^.*?(Наименование,?\s*характеристика|по\s+порядку)\s*/i, '').replace(/^\d{1,2}\s+/, '');
+    // Единица измерения: текстовая ячейка перед числами или единица в ячейке количества («12 бут»)
+    const nb = nameBand(anchors, i, opts, lineH, numBands[i], a.pitch);
+    const bandWords = words.filter((w) => w.cy > nb.top && w.cy <= nb.bottom);
+    const unitCells = makeCells(words.filter((w) => w.cy > numBands[i].top && w.cy <= numBands[i].bottom && w.x1 < numsLeftEdge), cellGap)
+      .filter((c) => UNIT_CELL_RE.test(c.text.replace(JUNK_RE, '').trim()) && (opts.code === 'none' || opts.nameSide === 'right' || c.x0 > anc.x1));
+    const unitCell = unitCells.sort((x, y) => y.x1 - x.x1)[0];
+    const qtyCell = colOf('qty') >= 0 ? rowCols[i][colOf('qty')] : undefined;
+    // Порядок: чётко прочитанная кириллица, второй проход с фильтром букв, похожие на единицу слова
+    const clean = unitCell?.text.replace(JUNK_RE, '').trim() ?? '';
+    const exact = /^(шт|кг|блок|бут|л|уп|упак|пач|пачка|кор|бан|банка)\.?$/i.test(clean) ? normalizeUnit(clean) : undefined;
+    const unit = exact ?? stripUnits[i] ?? normalizeUnit(unitCell?.text) ?? normalizeUnit(qtyCell?.num?.unit)
+      ?? normalizeUnit(cells.find((c) => !c.num && !extractNumbers(c.text).length && /[A-Za-zА-Яа-я]/.test(c.text) && c.x0 > anc.x1 && c.x1 < numsLeftEdge - lineH)?.text);
+    const unitWords = new Set(unitCell?.words ?? []);
 
-    // Единица измерения: текстовая ячейка сразу справа от кода
-    const unitCell = cells.find((c) => !extractNumbers(c.text).length && /[A-Za-zА-Яа-я]/.test(c.text) && c.x1 < (cols[0]?.center ?? Infinity) - lineH);
-    const unit = normalizeUnit(unitCell?.text);
+    // Наименование: слева от кода (З-2), справа от кода (упаковочные листы) или левее чисел (без кодов)
+    const half = lineH * 0.2;
+    let nameWords: Word[];
+    if (opts.code === 'none') {
+      nameWords = bandWords.filter((w) => w.x1 < numsLeftEdge - lineH * 0.3 && !unitWords.has(w));
+    } else if (opts.nameSide === 'right') {
+      nameWords = bandWords.filter((w) => w.x0 > anc.x1 + half && w.x1 < numsLeftEdge - lineH * 0.3 && !unitWords.has(w));
+    } else {
+      const right = Math.min(anc.x0 + half, articleX0 !== undefined ? articleX0 - lineH * 0.3 : Infinity);
+      nameWords = bandWords.filter((w) => w.x1 <= right && w.x0 < codeX0);
+    }
+    const name = cleanName(nameWords, lineH);
 
+    // Весовой товар: «5,23» OCR читает как «523» — добавляем варианты с потерянной запятой
+    const weight = unit === 'кг';
+    const qtyOf = (role: Role) => {
+      const v = numsOf(role);
+      return weight ? [...v, ...v.filter((x) => Number.isInteger(x) && x >= 100).flatMap((x) => [x / 100, x / 1000])] : v;
+    };
     const sol = solveRow({
-      qty: [...numsOf('qtyPlan'), ...numsOf('qty')],
+      qty: [...qtyOf('qtyPlan'), ...qtyOf('qty')],
+      qtyPlan: qtyOf('qtyPlan'),
+      weight,
       price: numsOf('price'),
       sum: numsOf('sum'),
       vat: numsOf('vat'),
@@ -315,42 +643,104 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
 
     const item: ParsedItem = {
       n: i + 1,
-      code: anc.code,
+      code: anc.code || undefined,
       name,
       unit,
       qty: sol.qty,
       price: sol.price,
       sum: sol.sum,
-      vat: sol.vat,
+      vat: colOf('vat') >= 0 ? sol.vat : undefined,
       issues: [...sol.issues],
       alternatives: sol.alternatives.map(({ qty, price, sum }) => ({ qty, price, sum })),
-      raw: [wordsToText(nameWords, lineH), anc.code, ...cells.map((c) => c.text)].join(' | '),
+      readings: { price: numsOf('price'), sum: numsOf('sum'), support: sol.support },
+      raw: [wordsToText(nameWords, lineH), anc.code, ...cells.map((c) => c.text)].filter(Boolean).join(' | '),
     };
-    applyCode(item, anc, opts);
+    if (opts.code !== 'none') applyCode(item, anc, opts);
     if (!name) item.issues.push(issue('warn', 'Не прочитано наименование'));
     doc.items.push(item);
+  });
+
+  // Единица не прочитана: дробное количество — кг; иначе единица всей накладной, если она одна,
+  // или соседних строк (товары обычно сгруппированы: весовые подряд, штучные подряд)
+  const units = new Set(doc.items.map((it) => it.unit).filter(Boolean));
+  const read = doc.items.map((it) => it.unit);
+  doc.items.forEach((it, i) => {
+    if (it.unit) return;
+    // (только у надёжно прочитанной строки — дробь из мусорных прочтений не делает товар весовым)
+    if (it.qty !== undefined && !Number.isInteger(it.qty) && (it.readings?.support ?? 0) >= 3) { it.unit = 'кг'; return; }
+    if (units.size === 1) { it.unit = [...units][0]; return; }
+    const prev = read.slice(0, i).reverse().find(Boolean), next = read.slice(i + 1).find(Boolean);
+    const guess = prev && next ? (prev === next ? prev : undefined) : prev ?? next;
+    if (guess && guess !== 'кг') it.unit = guess;
   });
 
   // Итоги: строка «Итого» первого прохода и строки полос под таблицей
   const rowsSum = round2(doc.items.reduce((acc, it) => acc + (it.sum ?? 0), 0));
   const rowsVat = round2(doc.items.reduce((acc, it) => acc + (it.vat ?? 0), 0));
-  const totCells = totalsWords ? toCells(totalsWords) : [];
-  const totalRead = (role: Role): number[] => {
-    const ci = roles.indexOf(role);
+  // Слово «Итого» не прочитано — берём строку сразу под таблицей
+  const lastBand = numBands[numBands.length - 1];
+  const totalsLine = totalsWords ?? words.filter((w) => w.cy > lastBand.bottom && w.cy < lastBand.bottom + lineH * 1.6 && w.x0 > a.numbersLeft);
+  const totCells = makeCells(totalsLine, cellGap);
+  const totCols = cellsByColumn(totCells, cols, colTol);
+  const tol = 0.05 + doc.items.length * 0.01;
+  // Строку без слова «Итого» принимаем за итог, только если она сходится со строками
+  const trust = (vals: number[], target: number) => (totalsWords ? vals : vals.filter((v) => near(v, target, tol)));
+  const totalRead = (role: Role, target: number): number[] => {
+    const ci = colOf(role);
     if (ci < 0) return [];
-    return [...readValues(inColumn(totCells, ci)?.text, role), ...readValues(stripTotals.get(role), role)];
+    return [...trust(readValues(totCols[ci]?.num?.num, role), target), ...trust(readValues(stripTotals.get(role), role), target)];
   };
-  const sumC = totalRead('sum'), vatC = totalRead('vat'), qtyC = [...totalRead('qty'), ...totalRead('qtyPlan')];
-  if (sumC.length || vatC.length || qtyC.length) {
-    const sum = sumC.find((x) => near(x, rowsSum, 0.05 + doc.items.length * 0.01)) ?? sumC.find((x) => x >= 1) ?? sumC[0];
+  const sumC = totalRead('sum', rowsSum), vatC = totalRead('vat', rowsVat);
+  const qtyC = totalsWords ? [...totalRead('qty', 0), ...totalRead('qtyPlan', 0)] : [];
+  // Итог иногда напечатан между столбцами — берём все деньги строки «Итого»
+  const looseC = trust(totCells.flatMap((c) => extractNumbers(fixDigits(c.text.replace(JUNK_RE, ' '))).filter((t) => t.hasDecimals).map((t) => t.value)), rowsSum);
+  if (sumC.length || vatC.length || qtyC.length || looseC.length) {
+    const sum = [...sumC, ...looseC].find((x) => near(x, rowsSum, tol)) ?? sumC.find((x) => x >= 1) ?? sumC[0];
     doc.totals = {
       qty: qtyC[0],
       sum,
-      vat: vatC.find((x) => near(x, rowsVat, 0.05 + doc.items.length * 0.01)) ?? vatC[0],
-      sumAlt: [...sumC.filter((x) => x !== sum), ...vatC.map((v) => round2((v * (1 + VAT_RATE)) / VAT_RATE))],
+      vat: vatC.find((x) => near(x, rowsVat, tol)) ?? vatC[0],
+      sumAlt: [...sumC, ...looseC].filter((x) => x !== sum).concat(vatC.map((v) => round2((v * (1 + VAT_RATE)) / VAT_RATE))),
     };
   }
   return doc;
+}
+
+/**
+ * Столбец артикулов/кодов левее столбца кодов (Прима: «Артикул» перед «Штрихкодом»):
+ * его цифры не должны попасть в наименование. Возвращает левый край столбца.
+ */
+function findArticleColumn(words: Word[], anchors: Anchor[], codeX0: number, lineH: number): number | undefined {
+  const y0 = anchors[0].cy - lineH, y1 = anchors[anchors.length - 1].cy + lineH * 3;
+  const cands = words.filter((w) => w.cy > y0 && w.cy < y1 && w.x1 < codeX0 && (w.text.match(/\d/g) ?? []).length >= 5 && /^[\W]*[\dA-Za-z-]+[\W]*$/.test(w.text));
+  if (!cands.length) return undefined;
+  const cl = cluster1d(cands.map((w) => w.x0), lineH * 1.5).filter((c) => c.count >= Math.max(2, anchors.length * 0.3));
+  if (!cl.length) return undefined;
+  const nearest = cl.reduce((p, q) => (q.center > p.center ? q : p));
+  // столбец должен стоять вплотную к кодам, иначе это цифры внутри наименований
+  const x1s = cands.filter((w) => w.x0 >= nearest.members[0] && w.x0 <= nearest.members[nearest.members.length - 1]).map((w) => w.x1);
+  return median(x1s) > codeX0 - lineH * 4 ? nearest.members[0] : undefined;
+}
+
+function cleanName(allWords: Word[], lineH: number): string {
+  // Линии сетки и печати OCR читает как «П О Г ВИ Ш» с низкой уверенностью — такие строки выбрасываем
+  const lines = new Map<number, Word[]>();
+  for (const w of allWords) lines.set(w.line, [...(lines.get(w.line) ?? []), w]);
+  const junk = new Set([...lines].filter(([, ws]) => ws.filter((w) => w.conf < 50).length >= ws.length * 0.5).map(([li]) => li));
+  const nameWords = allWords.filter((w) => !junk.has(w.line) && !(w.conf < 30 && w.text.length <= 3) && !(w.conf < 60 && w.text.length <= 2 && !/\d/.test(w.text)));
+  // отрезаем № п/п и мусор в начале строк названия
+  const mx = median(nameWords.map((x) => x.x0));
+  const nameClean = nameWords.filter((w) => !(/^[\W\d_]{0,4}$/.test(w.text) && w.x0 < mx));
+  let name = wordsToText(nameClean.filter((w) => /[A-Za-zА-Яа-яЁё0-9]/.test(w.text)), lineH)
+    .replace(/[`"'“”„«»°|_~^\\]/g, '')
+    .replace(/\bNTIN:?\s*[\d\s]*/gi, ' ')
+    .replace(/\b\d{10,}\b/g, ' ')
+    .replace(/^[\s\-—–.,:;]+/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  // Строки заголовка таблицы попадают в первую строку — отрезаем
+  name = name.replace(/^.*?(Наименование,?\s*характеристика|по\s+порядку)\s*/i, '').replace(/^\d{1,2}\s+/, '');
+  return name;
 }
 
 /** Выбор кода из двух прочтений и проверка EAN */
@@ -375,6 +765,13 @@ function applyCode(item: ParsedItem, anc: Anchor, opts: Z2Options) {
     item.barcode = valid;
     return;
   }
+  const long = reads.find((c) => c.length === 14 && isValidEan(c.slice(0, 13)));
+  if (long) {
+    item.code = long;
+    item.barcode = long.slice(0, 13);
+    item.issues.push(issue('warn', `В накладной штрихкод из 14 цифр (${long}) — взяты первые 13, контрольная цифра сходится`));
+    return;
+  }
   const fixed = reads.map((c) => repairEan(c)).find((c): c is string => !!c);
   item.code = anc.code;
   if (fixed) {
@@ -394,25 +791,66 @@ export function normalizeUnit(t?: string): string | undefined {
   if (/^(wr|xr|w)$/.test(s)) return undefined;
   if (/^(к|кг|kr|kg|к[гr])$/.test(s)) return 'кг';
   if (/па[чy]|na[чy]|пэч|пач|nauk|пак|печк|точк/.test(s)) return 'пачка';
-  if (/^(ш|шт|ил|цл|um|ur|шл|wt|шr|шm|ит)/.test(s)) return 'шт';
-  if (/^л/.test(s)) return 'л';
-  if (/бут/.test(s)) return 'бут';
+  if (/^(ш|шт|ил|цл|um|ur|un|шл|wt|шr|шm|ит)/.test(s)) return 'шт';
+  if (/^бло?к/.test(s)) return 'блок';
+  if (/^л$|^n$/.test(s)) return 'л';
+  if (/бут|byt/.test(s)) return 'бут';
+  if (/^(кор|kop)/.test(s)) return 'кор';
   if (/уп/.test(s)) return 'уп';
-  return s.length <= 6 ? s : undefined;
+  // остальное — только известные единицы, а не мусор OCR («wv», «тог» из «Итог»)
+  return /^(г|гр|мл|м|рул|пар|компл|ящ|бан|банка|флак|пак)$/.test(s) ? s : undefined;
 }
 
-/** Номер и дата документа: первая дата в верхней части страницы и число перед ней */
+/** Латинские буквы, похожие на кириллические (OCR путает «АВ» и «AB») */
+const toCyrillic = (s: string) => s.replace(/[ABCEHKMOPTX]/g, (c) => 'АВСЕНКМОРТХ'['ABCEHKMOPTX'.indexOf(c)]);
+
+const MONTHS = ['январ', 'феврал', 'март', 'апрел', 'ма[яй]', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
+
+/** Дата в строке: 29.09.2026 или «29 сентября 2026» */
+function findDate(t: string): { date: string; index: number } | undefined {
+  const m = t.match(/(\d{2})(?:[.,]|\s(?=\d{2}\s))(\d{2})[.,\s](20\d{2})(?!\d)/);
+  if (m && Number(m[3]) >= 2015) return { date: `${m[1]}.${m[2]}.${m[3]}`, index: m.index! };
+  const w = t.match(new RegExp(String.raw`(\d{1,2})\s+(${MONTHS.join('|')})[а-я]*\s+(20\d{2})`, 'i'));
+  if (w) {
+    const mi = MONTHS.findIndex((x) => new RegExp(`^${x}`, 'i').test(w[2]));
+    return { date: `${w[1].padStart(2, '0')}.${String(mi + 1).padStart(2, '0')}.${w[3]}`, index: w.index! };
+  }
+  return undefined;
+}
+
+/** Номер и дата документа */
 export function findNumberAndDate(page: OcrPage): { number?: string; date?: string } {
+  const lines = page.lines.map((l) => l.text);
+  // «Номер реализации: АВ000103427» / «Внутренний номер: …» (упаковочный лист, в т.ч. вторая страница)
+  let number: string | undefined;
+  let date: string | undefined;
+  for (const t of lines) {
+    // OCR коверкает «реализации», поэтому держимся за «Номер … : АВ000103427»
+    const m = t.match(/[Нн]омер\S*(?:\s+[^\s\d]+)?[\s:_.—-]+([A-ZА-Я]{2}[\dOО]{8,10})(?![\dA-Za-zА-Яа-я])/);
+    if (m && !number) number = toCyrillic(m[1].slice(0, 2)) + m[1].slice(2).replace(/[OО]/g, '0');
+    const d = t.match(/^\W*Дата\s+\S+\s*:?\s*(.*)$/i);
+    if (d && !date && !/составлен/i.test(t)) date = findDate(fixDigits(d[1]))?.date;
+  }
+  if (number || date) return { number, date };
+  // Заголовок «Накладная … № 94688 от 29 сентября 2026 г.»
+  for (const t of lines) {
+    if (!/накладн|документ/i.test(t)) continue;
+    const d = findDate(t) ?? findDate(fixDigits(t));
+    if (!d) continue;
+    const no = t.match(/№\s*([A-ZА-Яa-z]{0,3}\s?\d[\d-]{2,})/);
+    const before = fixDigits(t.slice(0, d.index)).match(/\d[\d-]{2,}/g);
+    return { date: d.date, number: no ? no[1].replace(/\s/g, '') : before?.[before.length - 1] };
+  }
   const top = page.lines.filter((l) => l.y1 < page.height * 0.45);
   for (const l of top) {
     // «от 20.12.2012 года №562» — дата приказа о форме, не документа
-    if (/приказ|министр|года|приложение/i.test(l.text)) continue;
+    if (/приказ|министр|года|приложение|время|оплатить/i.test(l.text)) continue;
     const t = fixDigits(l.text);
-    const m = t.match(/(\d{2})[.,](\d{2})[.,](20\d{2})/);
-    if (!m || Number(m[3]) < 2015) continue;
-    const before = t.slice(0, m.index).replace(/[|\]\[]/g, ' ');
+    const d = findDate(t);
+    if (!d) continue;
+    const before = t.slice(0, d.index).replace(/[|\]\[]/g, ' ');
     const nums = before.match(/\d[\d-]{2,}/g);
-    return { date: `${m[1]}.${m[2]}.${m[3]}`, number: nums ? nums[nums.length - 1] : undefined };
+    return { date: d.date, number: nums ? nums[nums.length - 1] : undefined };
   }
   return {};
 }

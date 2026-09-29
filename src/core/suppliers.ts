@@ -7,8 +7,11 @@
 export type ParserId = 'z2' | 'setkola';
 
 export interface Z2Options {
-  /** Какие коды стоят в столбце «Номенклатурный номер» */
-  code: 'ean' | 'digits';
+  /**
+   * Какие коды стоят в строках товаров: штрихкоды EAN-8/13, коды поставщика
+   * или никаких (тогда строки ищутся по столбцу сумм, а штрихкод — по названию)
+   */
+  code: 'ean' | 'digits' | 'none';
   /** Длина кода поставщика (для code = 'digits'), если известна */
   codeLength?: number;
   /**
@@ -16,6 +19,13 @@ export interface Z2Options {
    * 'up' — первая часть названия выше кода (GRAND), 'down' — хвост ниже (Мегаполис).
    */
   nameDir: 'up' | 'down' | 'nearest';
+  /** Наименование слева от кода (форма З-2) или справа (упаковочные листы, расходные накладные) */
+  nameSide?: 'left' | 'right';
+  /**
+   * Где в строке стоят числа: на одной линии с кодом (center, по умолчанию),
+   * внизу строки при коде у верхнего края (top) или на последней линии строки (bottom)
+   */
+  rowAlign?: 'center' | 'top' | 'bottom';
 }
 
 export interface SupplierDef {
@@ -50,6 +60,79 @@ export const SUPPLIERS: SupplierDef[] = [
     bins: ['180640007797'],
     keywords: [/С[эеa]т\s*Кола/i, /ВСЕГО\s+ПО\s+СЧЕТУ/i],
     parser: 'setkola',
+  },
+  {
+    // Ferrero, Mars и др.: штрихкоды EAN-8 и EAN-13, левее — «Артикул»; код у верхнего края строки, числа внизу
+    id: 'prima',
+    name: 'ТОО "Прима Дистрибьюшн"',
+    bins: ['081241007741'],
+    keywords: [/Прима\s*Дистр/i, /prima-group/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'down', rowAlign: 'top' },
+  },
+  {
+    // Сигареты блоками, номенклатурных номеров в накладной нет
+    id: 'mayan',
+    name: 'ТОО "MAYAN"',
+    bins: ['210540001009'],
+    keywords: [/MAYAN/i],
+    parser: 'z2',
+    z2: { code: 'none', nameDir: 'nearest' },
+  },
+  {
+    // Форма З-8, коды из 11 цифр, есть столбцы «Вес тары», «% скидки», «Скидка»
+    id: 'iskandyrov',
+    name: 'ИП Искандыров',
+    bins: [],
+    keywords: [/Искандыров/i],
+    parser: 'z2',
+    z2: { code: 'digits', codeLength: 11, nameDir: 'up', rowAlign: 'bottom' },
+  },
+  {
+    // Короткая накладная: Товар, Кол (упак), Кол-во, Цена, Сумма — без кодов
+    id: 'carlsberg-pepsi',
+    name: 'Карлсберг Пепси',
+    bins: [],
+    keywords: [/Карлсберг/i, /IM_KAZ/],
+    parser: 'z2',
+    z2: { code: 'none', nameDir: 'nearest' },
+  },
+  {
+    // Упаковочный лист: код 6 цифр, наименование справа от кода (с NTIN), цена по прайсу и со скидкой.
+    // Вторая страница без шапки — узнаём по «Внутренний номер» и NTIN.
+    id: 'eurasian-foods',
+    name: 'АО "Евразиан Фудс Корпорэйшн"',
+    bins: ['001041004585'],
+    keywords: [/Евразиан/i, /Упаковочн\S*\s+лист/i, /Внутренн\S*\s+номер[\s\S]*NTIN|NTIN[\s\S]*Внутренн\S*\s+номер/i],
+    parser: 'z2',
+    z2: { code: 'digits', codeLength: 6, nameDir: 'nearest', nameSide: 'right' },
+  },
+  {
+    // Штрихкод левее номенклатурного номера, столбец «Коробок», бонусные строки с тем же штрихкодом по 1 ₸
+    id: 'bes-batyr',
+    name: 'ТОО "БЕС БАТЫР" Актобе',
+    bins: [],
+    keywords: [/БЕС\s*БАТЫР/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'nearest' },
+  },
+  {
+    // Расходная накладная: NTIN, Штрихкод, Товар (справа), Общее «12 бут», Кор, Штук, Цена, Сумма
+    id: 'yupiter',
+    name: 'ТОО "Yupiter Aqtobe"',
+    bins: [],
+    keywords: [/Yupiter/i, /Юпитер/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top' },
+  },
+  {
+    // Колбасы: штрихкод, код ТН ВЭД, «отпущено (кг)» между количеством и ценой
+    id: 'nuraly-trans-kom',
+    name: 'ТОО "НұралыТрансКом"',
+    bins: ['080540015288'],
+    keywords: [/Н[ұуy]ралы\s*Транс/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'up' },
   },
 ];
 

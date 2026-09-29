@@ -125,7 +125,8 @@ export function SettingsDrawer(p: Props) {
           <div className="drawer__body">
             <h3>Код поставщика → штрихкод</h3>
             <p className="muted">
-              Заполняется сам, когда вы вводите штрихкод для товара с кодом поставщика (Мегаполис, Сэт Кола и т.п.).
+              Заполняется сам, когда вы вводите штрихкод для товара с кодом поставщика (Мегаполис, Сэт Кола, Евразиан и т.п.)
+              или для товара без кода — тогда он запоминается по названию (MAYAN, Карлсберг Пепси).
               Хранится в этом браузере — сохраните файл, чтобы перенести на другой компьютер.
             </p>
             <div className="row-btns">
@@ -150,7 +151,9 @@ export function SettingsDrawer(p: Props) {
               {entries.slice(0, 300).map(([k, v]) => (
                 <li key={k}>
                   <span className="maplist__main">
-                    <span className="mono">{k.split('::')[1]}</span> → <span className="mono">{v.barcode}</span>
+                    {k.split('::')[1].startsWith('name:')
+                      ? <span>«{v.name}»</span>
+                      : <span className="mono">{k.split('::')[1]}</span>} → <span className="mono">{v.barcode}</span>
                     <span className="muted maplist__name">{v.supplier ? `${v.supplier} · ` : ''}{v.name}</span>
                   </span>
                   <button type="button" className="icon-btn" aria-label="Удалить" onClick={() => {

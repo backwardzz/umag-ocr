@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { recognizeInvoice } from './ocr/engine';
-import { loadMapping, saveMapping, mapKey, type MappingStore } from './core/mapping';
+import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from './core/mapping';
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
-import type { ParsedDoc, ParsedItem } from './core/types';
-import { applyMapping, docSupplierKey, newItem, patchItem, type DocEntry } from './app/model';
+import { issue, type ParsedDoc, type ParsedItem } from './core/types';
+import { applyMapping, docSupplierKey, findRelated, mergePages, newItem, patchItem, type DocEntry } from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
 import { UploadZone } from './app/UploadZone';
 import { DocList } from './app/DocList';
@@ -28,6 +28,8 @@ export default function App() {
   const files = useRef(new Map<string, File>());
   const mappingRef = useRef(mapping);
   mappingRef.current = mapping;
+  const docsRef = useRef(docs);
+  docsRef.current = docs;
 
   const catalog = useMemo(() => (catalogItems.length ? new CatalogIndex(catalogItems) : undefined), [catalogItems]);
 
@@ -51,7 +53,27 @@ export default function App() {
       last = pct;
       update(id, { status: 'processing', stage, progress: p });
     })
-      .then((res) => update(id, { status: 'done', progress: 1, doc: applyMapping(res.doc, mappingRef.current), processedUrl: res.processedUrl }))
+      .then((res) => {
+        const doc = applyMapping(res.doc, mappingRef.current);
+        const self = docsRef.current.find((d) => d.id === id);
+        const rel = findRelated(docsRef.current, id, doc);
+        if (rel?.kind === 'page' && self) {
+          // Вторая страница той же накладной — присоединяем к первой, отдельной карточки не будет
+          const page = { fileName: self.fileName, fileUrl: self.fileUrl, processedUrl: res.processedUrl };
+          setDocs((prev) => prev.filter((d) => d.id !== id).map((d) => (d.id === rel.target.id && d.doc
+            ? { ...d, doc: mergePages(d.doc, doc), extraPages: [...(d.extraPages ?? []), page] }
+            : d)));
+          setSelected((cur) => (cur === id ? rel.target.id : cur));
+          files.current.delete(id);
+          toast(`«${self.fileName}» — следующая страница накладной${doc.number ? ` № ${doc.number}` : ''}, строки добавлены к ней`);
+          return;
+        }
+        const flagged = rel?.kind === 'duplicate'
+          ? { ...doc, issues: [issue('error', `Эта накладная уже загружена («${rel.target.fileName}») — не импортируйте её в UMAG дважды`, 'duplicate'), ...doc.issues] }
+          : doc;
+        if (rel?.kind === 'duplicate') toast(`«${self?.fileName ?? 'Фото'}» — повтор уже загруженной накладной`);
+        update(id, { status: 'done', progress: 1, doc: flagged, processedUrl: res.processedUrl });
+      })
       .catch((err: unknown) => update(id, { status: 'error', error: err instanceof Error ? err.message : String(err) }));
   }, [update]);
 
@@ -108,16 +130,18 @@ export default function App() {
     const doc = current.doc;
     const item = doc.items[index];
     changeDoc(current.id, (d) => ({ ...d, items: d.items.map((it, i) => (i === index ? patchItem(it, patch) : it)) }));
-    // Штрихкод для кода поставщика — запоминаем и подставляем в другие открытые накладные
-    if ('barcode' in patch && patch.barcode && item.code && item.barcodeSource !== 'invoice') {
+    // Штрихкод для кода поставщика (или названия, если кодов нет) — запоминаем
+    // и подставляем в другие открытые накладные
+    const code = itemMapCode(item);
+    if ('barcode' in patch && patch.barcode && code && item.barcodeSource !== 'invoice') {
       const sk = docSupplierKey(doc);
       const m: MappingStore = {
         ...mappingRef.current,
-        [mapKey(sk, item.code)]: { barcode: patch.barcode, name: item.name, supplier: doc.supplier, updated: new Date().toISOString() },
+        [mapKey(sk, code)]: { barcode: patch.barcode, name: item.name, supplier: doc.supplier, updated: new Date().toISOString() },
       };
       setMapping(m);
       setDocs((prev) => prev.map((d) => (d.doc && d.id !== current.id && docSupplierKey(d.doc) === sk ? { ...d, doc: applyMapping(d.doc, m) } : d)));
-      toast(`Запомнено: код ${item.code} → ${patch.barcode}`);
+      toast(item.code ? `Запомнено: код ${item.code} → ${patch.barcode}` : `Запомнено: «${item.name}» → ${patch.barcode}`);
     }
   };
 
@@ -161,7 +185,11 @@ export default function App() {
             <li><b>Проверьте</b> строки, отмеченные жёлтым или красным</li>
             <li><b>Скачайте Excel</b> и загрузите его в UMAG: «Приёмка» → «Импорт товаров»</li>
           </ol>
-          <p className="muted small">Сейчас узнаёт: GRAND Кондитер, Мегаполис-Казахстан, Сэт Кола и другие накладные по форме З-2.</p>
+          <p className="muted small">
+            Сейчас узнаёт: GRAND Кондитер, Мегаполис-Казахстан, Сэт Кола, Прима Дистрибьюшн, MAYAN, ИП Искандыров,
+            Карлсберг Пепси, Евразиан Фудс, БЕС БАТЫР, Yupiter Aqtobe, НұралыТрансКом и другие накладные по форме З-2.
+            Многостраничную накладную загрузите всеми фото — страницы склеятся сами.
+          </p>
         </main>
       ) : (
         <div className="layout">

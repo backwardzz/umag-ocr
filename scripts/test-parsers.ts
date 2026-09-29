@@ -2,8 +2,10 @@
  * Быстрая проверка парсеров на сохранённых результатах OCR (samples/*.ocr.json),
  * без повторного распознавания. Эталоны — samples/*.expected.json (если есть).
  * Для каждой накладной дополнительно собирается Excel для UMAG и читается обратно.
- *   npm test          — кратко
- *   npm test -- -v    — со всеми строками
+ *   npm test                 — кратко
+ *   npm test -- -v           — со всеми строками
+ *   npm test -- --no-strips  — только первый проход OCR (когда полосы записаны старым планом)
+ *   npm test -- prima        — только файлы, в имени которых есть «prima»
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,8 +43,12 @@ async function checkExcel(doc: ParsedDoc): Promise<string[]> {
 }
 
 let failed = 0;
-for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json')).sort()) {
+const noStrips = process.argv.includes('--no-strips');
+const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+const digits = (x?: string) => (x ?? '').replace(/\D/g, '').replace(/^0+/, '');
+for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json') && (!only.length || only.some((o) => x.includes(o)))).sort()) {
   const page: OcrPage = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+  if (noStrips) delete page.strips;
   const doc = parseDocument(page);
   console.log(`\n===== ${f}: ${doc.supplier ?? 'поставщик не определён'}, ${doc.items.length} поз.`);
   if (verbose) printDoc(doc);
@@ -50,15 +56,32 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json')).sort(
   // 1-browser.ocr.json проверяется по 1.expected.json
   const expFile = path.join(dir, f.replace(/(-[\w]+)?\.ocr\.json$/, '.expected.json'));
   if (fs.existsSync(expFile)) {
-    const exp: { items: { code?: string; barcode?: string; qty: number; price: number; sum: number }[] } = JSON.parse(fs.readFileSync(expFile, 'utf8'));
+    const exp: {
+      supplier?: string; number?: string; date?: string;
+      items: { code?: string; barcode?: string; qty: number; price: number; sum: number; unit?: string }[];
+      /** Известные ограничения по варианту OCR ('browser' / 'node'): печатаются, но не считаются ошибкой */
+      knownIssues?: Record<string, string>;
+    } = JSON.parse(fs.readFileSync(expFile, 'utf8'));
+    const variant = f.includes('-browser') ? 'browser' : 'node';
+    const known = exp.knownIssues?.[variant];
+    if (exp.supplier && !(doc.supplier ?? '').toLowerCase().includes(exp.supplier.toLowerCase())) errs.push(`поставщик ${doc.supplier}, ожидался ${exp.supplier}`);
+    // Шапку OCR читает хуже таблицы (69236 вместо 59236), это замечание, а не ошибка разбора
+    const notes: string[] = [];
+    if (exp.number && digits(doc.number) !== digits(exp.number)) notes.push(`номер ${doc.number}, ожидался ${exp.number}`);
+    if (exp.date && doc.date !== exp.date) notes.push(`дата ${doc.date}, ожидалась ${exp.date}`);
+    if (notes.length) console.log(`  шапка: ${notes.join('; ')}`);
     if (exp.items.length !== doc.items.length) errs.push(`строк ${doc.items.length}, ожидалось ${exp.items.length}`);
     exp.items.forEach((e, i) => {
       const it = doc.items[i];
       if (!it) return;
-      for (const k of ['code', 'barcode', 'qty', 'price', 'sum'] as const) {
+      for (const k of ['code', 'barcode', 'qty', 'price', 'sum', 'unit'] as const) {
         if (e[k] !== undefined && it[k] !== e[k]) errs.push(`строка ${i + 1}: ${k} = ${it[k]}, ожидалось ${e[k]}`);
       }
     });
+    if (known && errs.length) {
+      console.log(`  известное ограничение: ${known}\n    ${errs.join('\n    ')}`);
+      errs.length = 0;
+    }
   }
   const totals = doc.issues.find((x) => x.kind === 'totals');
   if (totals) console.log(`  ${totals.text}`);

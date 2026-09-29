@@ -35,6 +35,8 @@ export interface ParsedItem {
   issues: Issue[];
   /** Другие правдоподобные прочтения строки (для сверки с итогом документа) */
   alternatives?: { qty: number; price: number; sum: number }[];
+  /** Все прочтения цены и число подтверждений выбранного варианта — для восстановления строки по итогу */
+  readings?: { price: number[]; sum: number[]; support: number };
   /** Исходная строка OCR, чтобы пользователь видел, откуда взялись числа */
   raw?: string;
 }
@@ -50,6 +52,8 @@ export interface ParsedDoc {
   items: ParsedItem[];
   totals?: { qty?: number; sum?: number; vat?: number; /** другие прочтения итога */ sumAlt?: number[] };
   issues: Issue[];
+  /** Сколько фото (страниц) склеено в эту накладную */
+  pages?: number;
 }
 
 export const issue = (level: IssueLevel, text: string, kind?: string): Issue => (kind ? { level, text, kind } : { level, text });

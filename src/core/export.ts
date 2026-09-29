@@ -47,18 +47,47 @@ export function exportableItems(doc: ParsedDoc): ParsedItem[] {
   return doc.items.filter((it) => it.barcode && it.qty);
 }
 
+interface ExportLine { it: ParsedItem; qty?: number; price?: number; unit?: string; sum?: number }
+
+/**
+ * Строки файла. Одинаковые штрихкоды (бонусный товар отдельной строкой по 1 ₸,
+ * одна позиция на двух страницах) складываем: UMAG при импорте ищет товар по штрихкоду,
+ * и две строки с одним штрихкодом могут не сложиться. Цена — средняя: сумма / количество.
+ */
+export function exportLines(doc: ParsedDoc, s: ExportSettings): ExportLine[] {
+  const byBarcode = new Map<string, ExportLine>();
+  for (const it of exportableItems(doc)) {
+    const { qty, price, unit } = qtyPrice(it, s.qtyMode);
+    const sum = it.sum ?? (qty !== undefined && price !== undefined ? round2(qty * price) : undefined);
+    const prev = byBarcode.get(it.barcode!);
+    if (!prev) {
+      byBarcode.set(it.barcode!, { it, qty, price, unit, sum });
+      continue;
+    }
+    prev.qty = Math.round(((prev.qty ?? 0) + (qty ?? 0)) * 1000) / 1000;
+    prev.sum = round2((prev.sum ?? 0) + (sum ?? 0));
+    if (prev.qty) prev.price = round2(prev.sum / prev.qty);
+  }
+  return [...byBarcode.values()];
+}
+
+/** Сколько строк накладной сольются с другими в файле (одинаковый штрихкод) */
+export function mergedLineCount(doc: ParsedDoc): number {
+  const items = exportableItems(doc);
+  return items.length - new Set(items.map((it) => it.barcode)).size;
+}
+
 export function buildRows(doc: ParsedDoc, s: ExportSettings): (string | number)[][] {
   const rows: (string | number)[][] = [];
   if (s.header) rows.push(s.columns.map((c) => COLUMN_LABELS[c]));
-  for (const it of exportableItems(doc)) {
-    const { qty, price, unit } = qtyPrice(it, s.qtyMode);
+  for (const { it, qty, price, unit, sum } of exportLines(doc, s)) {
     rows.push(s.columns.map((c) => {
       switch (c) {
         case 'barcode': return it.barcode ?? '';
         case 'qty': return qty ?? '';
         case 'price': return price ?? '';
         case 'name': return it.name;
-        case 'sum': return it.sum ?? '';
+        case 'sum': return sum ?? '';
         case 'code': return it.code ?? '';
         case 'unit': return unit ?? '';
       }

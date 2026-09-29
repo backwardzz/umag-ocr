@@ -6,11 +6,11 @@
  */
 import type { OcrPage, StripPlan } from './ocrTypes';
 import { pageText } from './layout';
-import { fixDigits, near, round2 } from './numbers';
+import { extractNumbers, fixDigits, near, round2 } from './numbers';
 import { SUPPLIERS, GENERIC_Z2, type SupplierDef, type Z2Options } from './suppliers';
 import { parseZ2, planZ2Strips, findNumberAndDate } from './formats/z2';
 import { parseSetKola } from './formats/setkola';
-import { issue, type ParsedDoc } from './types';
+import { issue, type ParsedDoc, type ParsedItem } from './types';
 
 export type { ParsedDoc, ParsedItem } from './types';
 
@@ -40,10 +40,13 @@ function chooseFormat(page: OcrPage): FormatChoice {
   if (supplier?.parser === 'setkola') return { kind: 'setkola', supplier };
   if (supplier?.parser === 'z2') return { kind: 'z2', opts: supplier.z2 ?? GENERIC_Z2, supplier, unknown: false };
   if (/ВСЕГО\s+ПО\s+СЧЕТУ|ЦЕНА\s+ЗА\s+УП/i.test(text)) return { kind: 'setkola' };
-  // Большинство накладных в РК — форма З-2. Сначала пробуем столбец с EAN, потом с кодами поставщика.
+  // Большинство накладных в РК — форма З-2. Сначала пробуем столбец с EAN, потом с кодами поставщика,
+  // потом таблицу без кодов.
+  const unknown = !/ОТПУСК\s+ЗАПАСОВ|З-2|3-2/i.test(text);
   const eanOpts: Z2Options = { code: 'ean', nameDir: 'nearest' };
-  const opts = parseZ2(page, eanOpts).items.length >= 2 ? eanOpts : GENERIC_Z2;
-  return { kind: 'z2', opts, unknown: !/ОТПУСК\s+ЗАПАСОВ|З-2|3-2/i.test(text) };
+  if (parseZ2(page, eanOpts).items.length >= 2) return { kind: 'z2', opts: eanOpts, unknown };
+  if (parseZ2(page, GENERIC_Z2).items.length >= 2) return { kind: 'z2', opts: GENERIC_Z2, unknown };
+  return { kind: 'z2', opts: { code: 'none', nameDir: 'nearest' }, unknown };
 }
 
 /** Что распознать вторым проходом (узкие полосы столбцов) */
@@ -71,8 +74,33 @@ export function parseDocument(page: OcrPage): ParsedDoc {
     doc.number ??= nd.number;
     doc.date ??= nd.date;
   }
+  addTextTotals(doc, page);
   checkTotals(doc);
   return doc;
+}
+
+/**
+ * Итог из текста под таблицей: «Итого: 45 576,00», «на сумму 77 134,00 KZT»,
+ * итог строкой ниже слова «ИТОГ:». Нужен, когда в столбце сумм итог не прочитан.
+ */
+function addTextTotals(doc: ParsedDoc, page: OcrPage) {
+  if (!doc.items.length) return;
+  const rows = round2(doc.items.reduce((a, it) => a + (it.sum ?? 0), 0));
+  const tol = 0.05 + doc.items.length * 0.01;
+  if (doc.totals?.sum !== undefined && near(doc.totals.sum, rows, tol)) return;
+  const found: number[] = [];
+  page.lines.forEach((l, i) => {
+    if (!/[иуй]тог|всего|к\s*оплате|на\s+сумму/i.test(l.text)) return;
+    for (const t of [l.text, page.lines[i + 1]?.text ?? '']) {
+      for (const tok of extractNumbers(fixDigits(t.replace(/[`'’‘"“”„°|\]\[]/g, ' ')))) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
+    }
+  });
+  if (!found.length) return;
+  const match = found.find((x) => near(x, rows, tol));
+  const totals = doc.totals ?? {};
+  if (totals.sum === undefined) totals.sum = match ?? Math.max(...found);
+  totals.sumAlt = [...(totals.sumAlt ?? []), ...found.filter((x) => x !== totals.sum)];
+  doc.totals = totals;
 }
 
 function checkTotals(doc: ParsedDoc) {
@@ -86,7 +114,7 @@ function checkTotals(doc: ParsedDoc) {
     // Итог мог быть прочитан с ошибкой — есть второе прочтение, совпадающее со строками?
     const alt = doc.totals.sumAlt?.find((x) => near(x, sum, tol));
     if (alt !== undefined) doc.totals.sum = alt;
-    else if (fixRowsByTotal(doc, doc.totals.sum, tol)) sum = round2(doc.items.reduce((a, it) => a + (it.sum ?? 0), 0));
+    else if (fixRowsByTotal(doc, doc.totals.sum, tol) || fillRowFromTotal(doc, doc.totals.sum)) sum = round2(doc.items.reduce((a, it) => a + (it.sum ?? 0), 0));
   }
   if (doc.totals?.sum !== undefined) {
     if (near(doc.totals.sum, sum, tol)) {
@@ -132,6 +160,52 @@ function fixRowsByTotal(doc: ParsedDoc, total: number, tol: number): boolean {
   }
   if (pairs.length === 1) { apply(pairs[0][0]); apply(pairs[0][1]); return true; }
   return false;
+}
+
+/**
+ * Ровно одна строка не прочитана (нет количества или числа не сходятся), а итог известен:
+ * её сумма = итог − остальные строки, количество = сумма / цена (если получается целое или граммы).
+ */
+function fillRowFromTotal(doc: ParsedDoc, total: number): boolean {
+  // Слабые строки: не прочитаны или сошлись меньше чем по трём числам
+  const weak = doc.items.filter((it) => it.qty === undefined || it.sum === undefined
+    || it.issues.some((x) => x.level === 'error') || (it.readings?.support ?? 3) <= 2);
+  const sols: { it: ParsedItem; qty: number; price: number; sum: number }[] = [];
+  for (const it of weak) {
+    // дробное количество допускаем, только если в накладной есть весовой товар
+    const weightDoc = it.unit === 'кг' || doc.items.some((x) => x !== it && x.qty !== undefined && !Number.isInteger(x.qty));
+    const others = doc.items.reduce((a, x) => (x === it ? a : a + (x.sum ?? 0)), 0);
+    const s = round2(total - others);
+    if (s <= 0) continue;
+    // Сумма строки должна узнаваться в том, что OCR всё-таки прочитал («472» в «5 472»),
+    // иначе итог относится к чему-то ещё (например, ко всей многостраничной накладной)
+    const digits = (x: number) => x.toFixed(2).replace(/\.00$/, '').replace('.', '');
+    const seen = (it.readings?.sum ?? []).map(digits).filter((d) => d.length >= 2);
+    if (!seen.some((d) => digits(s).includes(d) || d.includes(digits(s)))) continue;
+    // Прочтения цены идут по надёжности (первый проход, затем второй, затем варианты с потерянной запятой) —
+    // берём первое, при котором количество получается целым (или с граммами)
+    const prices = [...new Set([...(it.readings?.price ?? []), ...(it.price ? [it.price] : [])])];
+    const fit = (whole: boolean) => prices.find((p) => {
+      const q = s / p, q3 = Math.round(q * 1000) / 1000;
+      return q3 > 0 && q3 < 100000 && Math.abs(q - q3) < 1e-6 && (!whole || Number.isInteger(q3));
+    });
+    const p = fit(true) ?? (weightDoc ? fit(false) : undefined);
+    if (p !== undefined) sols.push({ it, qty: Math.round((s / p) * 1000) / 1000, price: p, sum: s });
+    else if (!prices.length && it.qty) sols.push({ it, qty: it.qty, price: round2(s / it.qty), sum: s });
+  }
+  // Решение должно быть единственным (иначе непонятно, какую строку чинить)
+  const whole = sols.filter((x) => Number.isInteger(x.qty));
+  const pick = whole.length === 1 ? whole[0] : sols.length === 1 ? sols[0] : undefined;
+  if (!pick) return false;
+  const it = pick.it;
+  it.qty = pick.qty;
+  it.price = pick.price;
+  const s = pick.sum;
+  it.sum = s;
+  if (it.vat !== undefined) it.vat = round2((s * 16) / 116);
+  it.issues = it.issues.filter((x) => x.level === 'info');
+  it.issues.push(issue('warn', 'Строка прочитана не полностью — сумма восстановлена по итогу накладной, сверьте с фото'));
+  return true;
 }
 
 export const fmt = (x: number) =>

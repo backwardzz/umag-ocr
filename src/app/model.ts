@@ -1,9 +1,15 @@
 import { isValidEan, round2, near } from '../core/numbers';
-import { mapKey, supplierKey, type MappingStore } from '../core/mapping';
-import type { CatalogIndex } from '../core/catalog';
+import { itemMapCode, mapKey, supplierKey, type MapEntry, type MappingStore } from '../core/mapping';
+import { nameSimilarity, type CatalogIndex } from '../core/catalog';
 import { issue, type Issue, type ParsedDoc, type ParsedItem } from '../core/types';
 
 export type DocStatus = 'queued' | 'processing' | 'done' | 'error';
+
+export interface PagePhoto {
+  fileName: string;
+  fileUrl: string;
+  processedUrl?: string;
+}
 
 export interface DocEntry {
   id: string;
@@ -15,16 +21,92 @@ export interface DocEntry {
   error?: string;
   doc?: ParsedDoc;
   processedUrl?: string;
+  /** Следующие страницы той же накладной, присоединённые к этой */
+  extraPages?: PagePhoto[];
 }
 
 export const docSupplierKey = (doc: ParsedDoc) => supplierKey(doc.supplierBin, doc.supplier);
 
-/** Подставляет штрихкоды из справочника для строк с кодом поставщика */
+const numberDigits = (s?: string) => (s ?? '').replace(/\D/g, '').replace(/^0+/, '');
+const rowsSum = (d: ParsedDoc) => round2(d.items.reduce((a, it) => a + (it.sum ?? 0), 0));
+
+/** Все строки накладной b уже есть в a (то же фото или та же страница загружена повторно) */
+function containsItems(a: ParsedDoc, b: ParsedDoc): boolean {
+  if (!b.items.length) return false;
+  const pool = [...a.items];
+  return b.items.every((it) => {
+    const i = pool.findIndex((x) => near(x.sum, it.sum, 0.05) && near(x.qty, it.qty, 0.001)
+      && (it.barcode || it.code ? (x.barcode ?? x.code) === (it.barcode ?? it.code) : nameSimilarity(x.name, it.name) > 0.6));
+    if (i < 0) return false;
+    pool.splice(i, 1);
+    return true;
+  });
+}
+
+/**
+ * Новая накладная относительно уже загруженных: повтор (то же фото или та же накладная ещё раз)
+ * или следующая страница (тот же поставщик и номер, другие строки — упаковочный лист на 2 листах).
+ */
+export function findRelated(docs: DocEntry[], id: string, doc: ParsedDoc): { kind: 'duplicate' | 'page'; target: DocEntry } | undefined {
+  const sk = docSupplierKey(doc);
+  const no = numberDigits(doc.number);
+  for (const d of docs) {
+    if (d.id === id || !d.doc || docSupplierKey(d.doc) !== sk) continue;
+    const sameNumber = !!no && numberDigits(d.doc.number) === no;
+    // без номера (Карлсберг Пепси) — повтор, если совпали дата, число строк и сумма
+    const sameWithoutNumber = !no && !numberDigits(d.doc.number) && d.doc.date === doc.date
+      && d.doc.items.length === doc.items.length && near(rowsSum(d.doc), rowsSum(doc), 0.05);
+    if ((sameNumber || sameWithoutNumber) && containsItems(d.doc, doc)) return { kind: 'duplicate', target: d };
+    if (sameNumber) return { kind: 'page', target: d };
+  }
+  return undefined;
+}
+
+/** Склеивает страницы одной накладной; страница с «Итого» (последняя) идёт в конец */
+export function mergePages(a: ParsedDoc, b: ParsedDoc): ParsedDoc {
+  const [first, last] = a.totals?.sum !== undefined && b.totals?.sum === undefined ? [b, a] : [a, b];
+  const items = [...first.items, ...last.items].map((it, i) => ({ ...it, n: i + 1 }));
+  return {
+    ...a,
+    supplier: a.supplier ?? b.supplier,
+    supplierBin: a.supplierBin ?? b.supplierBin,
+    number: first.number ?? last.number,
+    date: first.date ?? last.date,
+    items,
+    totals: last.totals ?? first.totals,
+    issues: [...first.issues, ...last.issues].filter((x, i, all) => x.kind !== 'totals' && all.findIndex((y) => y.text === x.text) === i),
+    pages: (a.pages ?? 1) + (b.pages ?? 1),
+  };
+}
+
+/** Подставляет штрихкоды из справочника для строк с кодом поставщика (или по названию, если кодов нет) */
 export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
   const sk = docSupplierKey(doc);
+  const byName = Object.entries(mapping).filter(([k]) => k.startsWith(`${sk}::name:`));
   let changed = false;
   const items = doc.items.map((it) => {
-    if (it.barcode || !it.code) return it;
+    if (it.barcode) return it;
+    if (!it.code) {
+      const key = itemMapCode(it);
+      if (!key) return it;
+      const exact = mapping[mapKey(sk, key)];
+      if (exact) {
+        changed = true;
+        return { ...it, barcode: exact.barcode, barcodeSource: 'mapping' as const };
+      }
+      // OCR читает название каждый раз чуть по-разному — ищем самое похожее из запомненных
+      let best: MapEntry | undefined, score = 0;
+      for (const [k, v] of byName) {
+        const sc = nameSimilarity(it.name, v.name ?? k.split('::name:')[1]);
+        if (sc > score) { score = sc; best = v; }
+      }
+      if (!best || score < 0.72) return it;
+      changed = true;
+      return {
+        ...it, barcode: best.barcode, barcodeSource: 'mapping' as const,
+        issues: [...it.issues, issue('warn', `Штрихкод из справочника по похожему названию «${best.name ?? ''}» — сверьте`, 'fuzzy')],
+      };
+    }
     const m = mapping[mapKey(sk, it.code)];
     if (m) {
       changed = true;
@@ -48,7 +130,9 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
   if (!it.barcode) {
     out.push(issue('error', it.code
       ? `Нет штрихкода для кода поставщика ${it.code} — введите один раз, он запомнится`
-      : 'Нет штрихкода — строка не попадёт в файл', 'barcode'));
+      : it.name.trim()
+        ? 'Нет штрихкода — введите один раз, для этого товара он запомнится'
+        : 'Нет штрихкода — строка не попадёт в файл', 'barcode'));
   } else {
     if (!/^\d+$/.test(it.barcode)) out.push(issue('error', 'Штрихкод должен состоять только из цифр'));
     // Внутренние штрихкоды магазина (начинаются с 2) бывают без контрольной цифры

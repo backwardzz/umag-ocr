@@ -14,8 +14,9 @@ export function DocList({ docs, selected, catalog, onSelect }: Props) {
     <ul className="doclist">
       {docs.map((d) => {
         const s = d.doc ? summarize(d.doc, catalog) : undefined;
-        const ok = s && s.errors === 0 && s.totalsOk !== false && s.missingBarcode === 0;
-        const why = !s ? '' : ok ? 'Готово к выгрузке' : s.errors ? `${s.errors} строк с ошибками` : s.missingBarcode ? `${s.missingBarcode} без штрихкода` : 'Не сходится с итогом';
+        const dup = !!d.doc?.issues.some((x) => x.kind === 'duplicate');
+        const ok = s && !dup && s.errors === 0 && s.totalsOk !== false && s.missingBarcode === 0;
+        const why = !s ? '' : dup ? 'Повтор уже загруженной накладной' : ok ? 'Готово к выгрузке' : s.errors ? `${s.errors} строк с ошибками` : s.missingBarcode ? `${s.missingBarcode} без штрихкода` : 'Не сходится с итогом';
         return (
           <li key={d.id}>
             <button type="button" className={`doccard ${selected === d.id ? 'doccard--active' : ''}`} onClick={() => onSelect(d.id)}>
@@ -32,12 +33,12 @@ export function DocList({ docs, selected, catalog, onSelect }: Props) {
                 {d.status === 'error' && <span className="doccard__meta doccard__meta--err">Ошибка: {d.error}</span>}
                 {s && d.doc && (
                   <span className="doccard__meta">
-                    {d.doc.number ? `№ ${d.doc.number} · ` : ''}{s.rows} поз. · {money(s.sum)} ₸
+                    {dup ? 'Повтор · ' : ''}{d.doc.number ? `№ ${d.doc.number} · ` : ''}{d.doc.pages ? `${d.doc.pages} стр. · ` : ''}{s.rows} поз. · {money(s.sum)} ₸
                   </span>
                 )}
               </span>
               {s && (
-                <span className={`doccard__status ${ok ? 'is-ok' : s.errors ? 'is-err' : 'is-warn'}`} title={why}>
+                <span className={`doccard__status ${ok ? 'is-ok' : s.errors || dup ? 'is-err' : 'is-warn'}`} title={why}>
                   {ok ? <IconCheck /> : <IconAlert />}
                 </span>
               )}

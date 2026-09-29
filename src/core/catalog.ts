@@ -80,6 +80,15 @@ function trigrams(s: string): Set<string> {
   return set;
 }
 
+/** Похожесть названий 0…1 (коэффициент Дайса по триграммам) — переживает ошибки OCR в отдельных буквах */
+export function nameSimilarity(a: string, b: string): number {
+  const x = trigrams(normalizeName(a)), y = trigrams(normalizeName(b));
+  if (!x.size || !y.size) return 0;
+  let inter = 0;
+  for (const g of x) if (y.has(g)) inter++;
+  return (2 * inter) / (x.size + y.size);
+}
+
 export class CatalogIndex {
   private items: { item: CatalogItem; tri: Set<string> }[];
   private byBarcode: Map<string, CatalogItem>;
