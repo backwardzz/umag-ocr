@@ -32,7 +32,7 @@ type ColRole = Role | 'skip';
 const LEGACY_ROLES: Role[] = ['qtyPlan', 'qty', 'price', 'sum', 'vat'];
 
 /** Единицы в ячейках, включая типичные ошибки OCR (wr = шт, kop = кор) */
-const UNIT_WORD = String.raw`(?:шт|wr|ur|um|шr|кг|kr|kg|блок|бут|byt|уп|упак|пач|пачка|пак|кор|kop|бан|банка|л)`;
+const UNIT_WORD = String.raw`(?:штука|штук|шт|wr|ur|um|шr|кг|kr|kg|блок|бут|byt|уп|упак|пачка|пач|пак|кор|kop|банка|бан|л)`;
 const UNIT_CELL_RE = new RegExp(String.raw`^${UNIT_WORD}\.?$`, 'i');
 const TRAILING_UNIT_RE = new RegExp(String.raw`\s*(${UNIT_WORD})\.?$`, 'i');
 /** Мусор, который OCR цепляет к числам: кавычки, штрихи, скобки, линии таблицы */
@@ -572,7 +572,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
   // берём только целые слова («шт», «кг»): обрывки «к», «т» второй проход выдаёт и для «шт», и для «кг»
   const unitLines = (stripOf('unit')?.lines ?? [])
     .map((l) => ({ cy: (l.y0 + l.y1) / 2, text: l.text.replace(/[^А-Яа-яЁё]/g, ''), used: false }))
-    .filter((l) => /^(шт|кг|блок|бут|уп|упак|пач|пачка|кор|л|бан)$/i.test(l.text))
+    .filter((l) => l.text.length >= 2 && ['шт', 'кг', 'блок', 'бут', 'уп', 'пачка', 'кор', 'л', 'бан'].includes(normalizeUnit(l.text) ?? ''))
     .sort((x, y) => x.cy - y.cy);
   if (unitLines.length) {
     const match = alignSequences(expectY, unitLines.map((l) => l.cy), alignTol);
@@ -606,7 +606,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     const qtyCell = colOf('qty') >= 0 ? rowCols[i][colOf('qty')] : undefined;
     // Порядок: чётко прочитанная кириллица, второй проход с фильтром букв, похожие на единицу слова
     const clean = unitCell?.text.replace(JUNK_RE, '').trim() ?? '';
-    const exact = /^(шт|кг|блок|бут|л|уп|упак|пач|пачка|кор|бан|банка)\.?$/i.test(clean) ? normalizeUnit(clean) : undefined;
+    const exact = /^(шт|штука|штук|кг|блок|бут|л|уп|упак|пач|пачка|кор|бан|банка)\.?$/i.test(clean) ? normalizeUnit(clean) : undefined;
     const unit = exact ?? stripUnits[i] ?? normalizeUnit(unitCell?.text) ?? normalizeUnit(qtyCell?.num?.unit)
       ?? normalizeUnit(cells.find((c) => !c.num && !extractNumbers(c.text).length && /[A-Za-zА-Яа-я]/.test(c.text) && c.x0 > anc.x1 && c.x1 < numsLeftEdge - lineH)?.text);
     const unitWords = new Set(unitCell?.words ?? []);
@@ -790,6 +790,8 @@ export function normalizeUnit(t?: string): string | undefined {
   // "wr"/"xr" OCR выдаёт и для «кг», и для «шт» — такие не угадываем
   if (/^(wr|xr|w)$/.test(s)) return undefined;
   if (/^(к|кг|kr|kg|к[гr])$/.test(s)) return 'кг';
+  // «Штука»: OCR выдаёт «Wryka», «Чтука»
+  if (/[тt]ук|^[wшч]r?[yу]к/.test(s)) return 'шт';
   if (/па[чy]|na[чy]|пэч|пач|nauk|пак|печк|точк/.test(s)) return 'пачка';
   if (/^(ш|шт|ил|цл|um|ur|un|шл|wt|шr|шm|ит)/.test(s)) return 'шт';
   if (/^бло?к/.test(s)) return 'блок';
