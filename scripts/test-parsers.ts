@@ -6,6 +6,7 @@
  *   npm test -- -v           — со всеми строками
  *   npm test -- --no-strips  — только первый проход OCR (когда полосы записаны старым планом)
  *   npm test -- prima        — только файлы, в имени которых есть «prima»
+ * Если есть samples/umag_catalog.xlsx, штрихкоды с ошибкой OCR исправляются по каталогу, как в приложении.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +16,8 @@ import { buildRows, toXlsxBlob, DEFAULT_EXPORT, COLUMN_LABELS, type ExportColumn
 import type { OcrPage } from '../src/core/ocrTypes';
 import type { ParsedDoc } from '../src/core/types';
 import { printDoc } from './print';
+import { CatalogIndex, parseCatalogData } from '../src/core/catalog';
+import { catalogFix } from '../src/app/model';
 
 const verbose = process.argv.includes('-v');
 const dir = 'samples';
@@ -22,6 +25,8 @@ if (!fs.existsSync(dir)) {
   console.log('Нет папки samples/ — положите туда фото и прогоните: npm run ocr -- samples/<фото>.jpg');
   process.exit(0);
 }
+const catalogFile = path.join(dir, 'umag_catalog.xlsx');
+const catalog = fs.existsSync(catalogFile) ? new CatalogIndex(parseCatalogData(fs.readFileSync(catalogFile))) : undefined;
 
 /** Excel для UMAG: штрихкод, название и единица — текстом, количество и цена — числами */
 async function checkExcel(doc: ParsedDoc): Promise<string[]> {
@@ -50,6 +55,17 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json') && (!o
   const page: OcrPage = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
   if (noStrips) delete page.strips;
   const doc = parseDocument(page);
+  // С каталогом UMAG (как в приложении) штрихкоды с ошибкой OCR исправляются на похожие из каталога
+  if (catalog) {
+    const fixed: string[] = [];
+    doc.items = doc.items.map((it) => {
+      const fix = catalogFix(it, doc, catalog);
+      if (!fix) return it;
+      fixed.push(`${it.barcode} → ${fix.barcode}`);
+      return { ...it, barcode: fix.barcode };
+    });
+    if (fixed.length) console.log(`  штрихкоды исправлены по каталогу: ${fixed.join(', ')}`);
+  }
   console.log(`\n===== ${f}: ${doc.supplier ?? 'поставщик не определён'}, ${doc.items.length} поз.`);
   if (verbose) printDoc(doc);
   const errs = await checkExcel(doc);
@@ -58,7 +74,8 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json') && (!o
   if (fs.existsSync(expFile)) {
     const exp: {
       supplier?: string; number?: string; date?: string;
-      items: { code?: string; barcode?: string; qty: number; price: number; sum: number; unit?: string }[];
+      /** known — известное ограничение строки (для всех вариантов OCR или по варианту): расхождения печатаются, но не считаются ошибкой */
+      items: { code?: string; barcode?: string; qty: number; price: number; sum: number; unit?: string; known?: string | Record<string, string> }[];
       /** Известные ограничения по варианту OCR ('browser' / 'node'): печатаются, но не считаются ошибкой */
       knownIssues?: Record<string, string>;
     } = JSON.parse(fs.readFileSync(expFile, 'utf8'));
@@ -74,9 +91,13 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json') && (!o
     exp.items.forEach((e, i) => {
       const it = doc.items[i];
       if (!it) return;
+      const rowErrs: string[] = [];
       for (const k of ['code', 'barcode', 'qty', 'price', 'sum', 'unit'] as const) {
-        if (e[k] !== undefined && it[k] !== e[k]) errs.push(`строка ${i + 1}: ${k} = ${it[k]}, ожидалось ${e[k]}`);
+        if (e[k] !== undefined && it[k] !== e[k]) rowErrs.push(`строка ${i + 1}: ${k} = ${it[k]}, ожидалось ${e[k]}`);
       }
+      const knownRow = typeof e.known === 'string' ? e.known : e.known?.[variant];
+      if (knownRow && rowErrs.length) console.log(`  известное ограничение, ${rowErrs.join('; ')} — ${knownRow}`);
+      else errs.push(...rowErrs);
     });
     if (known && errs.length) {
       console.log(`  известное ограничение: ${known}\n    ${errs.join('\n    ')}`);

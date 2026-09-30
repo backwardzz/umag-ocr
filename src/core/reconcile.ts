@@ -75,6 +75,16 @@ export function oneDigitOff(a: number, b: number): boolean {
   return false;
 }
 
+/**
+ * Прочитанная сумма подходит к q × p: с точностью до тиын или, для дробного количества,
+ * округлённая до целых тенге (KDV: 3,8 кг × 1 446 = 5 494,80 → 5 495)
+ */
+export function sumMatches(s: number, q: number, p: number, tol = sumTol(q)): boolean {
+  const exact = q * p;
+  if (near(s, round2(exact), tol)) return true;
+  return !Number.isInteger(q) && Number.isInteger(s) && s === Math.round(exact);
+}
+
 /** Допуск суммы: цена в накладной округлена до тиын, при большом количестве набегает */
 const sumTol = (qty: number) => Math.max(0.02, qty * 0.005 + 0.01);
 
@@ -112,12 +122,22 @@ export function solveRow(r: RowReadings): RowSolution {
       if (qHits > planHits) { score += 2 + qHits; support++; }
       else if (qHits) { score += 1 + qHits * 0.5; support++; }
       else if (qtyC.length) score -= 1; // количество прочитано, но не совпало
-      if (priceC.some((x) => near(x, p, 0.005))) { score += 3; support++; }
+      // одну и ту же цену прочитали оба прохода («1 742,00» и «174200» без запятой) — она вероятнее
+      const priceReads = r.price.filter((x) => near(x, p, 0.005)).length;
+      if (priceReads) { score += 3 + Math.min(1, (priceReads - 1) * 0.5); support++; }
       else if (priceC.some((x) => oneDigitOff(x, p))) score += 1;
       // из нескольких прочтений суммы — ближайшее к q × p (910,01 и 910,00 при 5 × 182)
-      const sRead = sumC.filter((x) => near(x, s, tol)).sort((x, y) => Math.abs(x - s) - Math.abs(y - s))[0];
-      if (sRead !== undefined) { score += 3; support++; }
-      else if (sumC.some((x) => oneDigitOff(x, s))) score += 1;
+      const sRead = sumC.filter((x) => sumMatches(x, q, p, tol)).sort((x, y) => Math.abs(x - s) - Math.abs(y - s))[0];
+      if (sRead !== undefined) {
+        // и сумму: «3 155,00» во втором проходе и «315500» без запятой в первом
+        // (только при прочитанной цене — иначе мусор «2» и «2» перевесит настоящую строку)
+        const sumReads = priceReads ? r.sum.filter((x) => near(x, sRead, 0.005)).length : 1;
+        score += 3 + Math.min(1, (sumReads - 1) * 0.5);
+        support++;
+        // прочитанные цена и сумма сошлись — сильнее, чем количество и сумма: сумму можно поделить
+        // на малое количество (2, 3) почти всегда, а две суммы с копейками совпадают не случайно
+        if (priceReads) score += 1;
+      } else if (sumC.some((x) => oneDigitOff(x, s))) score += 1;
       // Сумма в накладной — это q × p с округлением до тиын. Прочтение, отличающееся на 1 тиын
       // при точно прочитанной цене, — ошибка OCR (910,01 вместо 910,00)
       const exactPrice = priceC.some((x) => near(x, p, 0.001));
@@ -159,7 +179,7 @@ export function solveRow(r: RowReadings): RowSolution {
     const fixed: string[] = [];
     if (r.qty.length && !r.qty.some((x) => near(x, best.qty, 0.0001))) fixed.push('количество');
     if (r.price.length && !r.price.some((x) => near(x, best.price))) fixed.push('цена');
-    if (r.sum.length && !r.sum.some((x) => near(x, best.sum, sumTol(best.qty)))) fixed.push('сумма');
+    if (r.sum.length && !r.sum.some((x) => sumMatches(x, best.qty, best.price))) fixed.push('сумма');
     if (fixed.length) issues.push(issue('info', `Исправлено по арифметике: ${fixed.join(', ')}`));
   }
   const alternatives = cands.slice(1).filter((c, i, a) =>

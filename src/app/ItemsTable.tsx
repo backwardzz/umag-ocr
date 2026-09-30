@@ -132,9 +132,15 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                     {it.barcodeSource === 'mapping' && <span className="tag">из справочника</span>}
                     {it.barcodeSource === 'catalog' && (
                       <>
-                        <span className="tag tag--hint" title={`Найдено в каталоге UMAG: ${it.catalogMatch?.name ?? ''}`}>
-                          автозаполнение · возможна ошибка
-                        </span>
+                        {it.catalogMatch?.by === 'fix' ? (
+                          <span className="tag tag--hint" title={`В накладной прочитано ${it.ocrBarcode ?? ''}, в каталоге UMAG похожий: ${it.catalogMatch.name}`}>
+                            исправлен по каталогу · сверьте
+                          </span>
+                        ) : (
+                          <span className="tag tag--hint" title={`Найдено в каталоге UMAG: ${it.catalogMatch?.name ?? ''}`}>
+                            автозаполнение · возможна ошибка
+                          </span>
+                        )}
                         <button type="button" className="tag tag--btn" title="Штрихкод верный — запомнить для этого товара"
                           onClick={() => onChange(i, { barcode: it.barcode })}>
                           верно

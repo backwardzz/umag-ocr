@@ -125,6 +125,38 @@ export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
   return changed ? { ...doc, items } : doc;
 }
 
+/** В скольких цифрах различаются два кода одной длины */
+const digitDiff = (a: string, b: string) => (a.length === b.length ? [...a].filter((c, i) => c !== b[i]).length : Infinity);
+
+/**
+ * Штрихкод из накладной прочитан с ошибкой (OCR путает 5, 6, 8 и 9 в мелком шрифте), и такого
+ * штрихкода нет в каталоге UMAG. Кандидаты — товары каталога со штрихкодом, отличающимся от
+ * прочтения одной цифрой (если не сходится контрольная цифра), и товар, найденный по названию,
+ * если его штрихкод отличается не больше чем в трёх цифрах. Исправляем, только если кандидат один.
+ */
+export function catalogFix(it: ParsedItem, doc: ParsedDoc, catalog: CatalogIndex): { barcode: string; name: string } | undefined {
+  // Верный по контрольной цифре штрихкод, которого нет в каталоге, — скорее новый товар, чем ошибка OCR
+  // (у соседних вкусов одной марки штрихкоды отличаются в 1–2 цифрах, подмена была бы хуже пропуска)
+  if (!it.barcode || catalog.has(it.barcode) || isValidEan(it.barcode)) return undefined;
+  const reads = [...new Set([it.barcode, it.code, it.codeAlt].filter((c): c is string => !!c && /^\d{13}$/.test(c)))];
+  if (!reads.length) return undefined;
+  const subs = new Set<string>();
+  for (const r of reads) {
+    if (isValidEan(r)) continue;
+    for (let i = 0; i < 13; i++) {
+      for (let d = 0; d <= 9; d++) {
+        const c = r.slice(0, i) + d + r.slice(i + 1);
+        if (c !== r && catalog.has(c)) subs.add(c);
+      }
+    }
+  }
+  const m = catalog.match({ name: sourceName(it), unit: it.unit, supplier: doc.supplier, price: it.price });
+  const byName = m && m.by === 'name' && m.confidence !== 'low' && reads.some((r) => digitDiff(r, m.item.barcode) <= 3) ? m.item.barcode : undefined;
+  const pick = byName && (!subs.size || subs.has(byName)) ? byName : subs.size === 1 ? [...subs][0] : undefined;
+  if (!pick) return undefined;
+  return { barcode: pick, name: catalog.get(pick)?.name ?? '' };
+}
+
 /**
  * Автозаполнение штрихкодов из каталога UMAG для строк, где штрихкода нет ни в накладной,
  * ни в справочнике: по NTIN (точно) или по похожему названию (возможны ошибки).
@@ -135,8 +167,14 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
   const items = doc.items.map((it) => {
     let cur = it;
     if (cur.barcodeSource === 'catalog') {
-      cur = { ...cur, barcode: undefined, barcodeSource: undefined, catalogMatch: undefined };
+      // исправленный по каталогу штрихкод возвращаем к прочитанному в накладной
+      cur = { ...cur, barcode: cur.ocrBarcode, barcodeSource: cur.ocrBarcode ? 'invoice' : undefined, catalogMatch: undefined, ocrBarcode: undefined };
       changed = true;
+    }
+    const fix = cur.barcodeSource === 'invoice' && catalog?.size ? catalogFix(cur, doc, catalog) : undefined;
+    if (fix) {
+      changed = true;
+      return { ...cur, ocrBarcode: cur.barcode, barcode: fix.barcode, barcodeSource: 'catalog' as const, catalogMatch: { name: fix.name, by: 'fix' as const } };
     }
     if (cur.barcode || !catalog?.size || !cur.qty) return cur;
     const m = catalog.match({ name: sourceName(cur), unit: cur.unit, supplier: doc.supplier, codes: [...(cur.extraCodes ?? []), ...(cur.code ? [cur.code] : [])] });
@@ -186,7 +224,10 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
         ? 'Нет штрихкода — введите один раз, для этого товара он запомнится'
         : 'Нет штрихкода — строка не попадёт в файл', 'barcode'));
   } else {
-    if (it.barcodeSource === 'catalog' && it.catalogMatch) {
+    if (it.barcodeSource === 'catalog' && it.catalogMatch?.by === 'fix') {
+      out.push(issue('warn', `В накладной штрихкод прочитан как ${it.ocrBarcode ?? '?'} — такого нет в каталоге UMAG, `
+        + `исправлен на похожий штрихкод товара «${it.catalogMatch.name}», сверьте`, 'autofill'));
+    } else if (it.barcodeSource === 'catalog' && it.catalogMatch) {
       out.push(issue('warn', `Штрихкод подобран из каталога UMAG ${it.catalogMatch.by === 'code' ? 'по NTIN' : `по названию из накладной «${sourceName(it)}»`}`
         + ' — возможна ошибка, сверьте', 'autofill'));
     }
@@ -203,7 +244,8 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
 }
 
 export function allIssues(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
-  const parsed = it.edited ? [] : it.issues;
+  // замечание разбора о контрольной цифре неактуально, если штрихкод заменён (из каталога, справочника, вручную)
+  const parsed = it.edited ? [] : it.barcodeSource === 'invoice' ? it.issues : it.issues.filter((x) => x.kind !== 'ean');
   return [...itemProblems(it, catalog), ...parsed];
 }
 

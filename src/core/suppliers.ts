@@ -19,8 +19,18 @@ export interface Z2Options {
    * 'up' — первая часть названия выше кода (GRAND), 'down' — хвост ниже (Мегаполис).
    */
   nameDir: 'up' | 'down' | 'nearest';
-  /** Наименование слева от кода (форма З-2) или справа (упаковочные листы, расходные накладные) */
-  nameSide?: 'left' | 'right';
+  /**
+   * Наименование слева от кода (форма З-2), справа (упаковочные листы, расходные накладные)
+   * или штрихкод напечатан внутри наименования («… 95г / ШК: 4606779450709», Green House)
+   */
+  nameSide?: 'left' | 'right' | 'inline';
+  /**
+   * Между наименованием и кодом — столбец коротких номенклатурных номеров
+   * («КЗ111», «ЯП104», «0349»), их не должно быть в наименовании
+   */
+  shortArticles?: boolean;
+  /** Штрихкод не влез в ячейку: 12 цифр в строке кода, последняя цифра — строкой ниже (ЭльвиНиПлюс) */
+  codeWrap?: boolean;
   /**
    * Где в строке стоят числа: на одной линии с кодом (center, по умолчанию),
    * внизу строки при коде у верхнего края (top) или на последней линии строки (bottom)
@@ -121,7 +131,8 @@ export const SUPPLIERS: SupplierDef[] = [
     id: 'yupiter',
     name: 'ТОО "Yupiter Aqtobe"',
     bins: [],
-    keywords: [/Yupiter/i, /Юпитер/i],
+    // OCR читает название и как «Уирйег Agtobe»
+    keywords: [/Yupiter/i, /Юпитер/i, /Yupi/, /Поставщик.*A[qg]tob/i],
     parser: 'z2',
     z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top' },
   },
@@ -133,6 +144,46 @@ export const SUPPLIERS: SupplierDef[] = [
     keywords: [/Н[ұуy]ралы\s*Транс/i],
     parser: 'z2',
     z2: { code: 'ean', nameDir: 'up' },
+  },
+  {
+    // Мороженое: наименование в 2 строки, штрихкод перенесён — 12 цифр в первой строке, последняя во второй;
+    // номенклатурный номер («0349») и числа — во второй строке
+    id: 'elvi-ni-plus',
+    name: 'ТОО "ЭльвиНиПлюс"',
+    bins: [],
+    keywords: [/Эльв[иu]\s*Н[иu]\s*П/i, /ЭльвиНи/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'down', rowAlign: 'top', codeWrap: true, shortArticles: true },
+  },
+  {
+    // Молочка: штрихкод внутри наименования («… 100гр / ШК: 4605627007447»), количество «4,0000»,
+    // цена и сумма по акции со скидкой
+    id: 'green-house',
+    name: 'Филиал ТОО "Green House Limited" Актобе',
+    bins: ['201140022444'],
+    keywords: [/Green\s*House/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'up', rowAlign: 'bottom', nameSide: 'inline' },
+  },
+  {
+    // Кондитерка и снеки: номенклатурный номер «ЯП104» перед штрихкодом, весовые товары «4,5 кг»,
+    // суммы округлены до тенге (3,8 × 1 446 = 5 495)
+    id: 'kdv',
+    name: 'ТОО "KDV Казахстан"',
+    bins: ['041240000988'],
+    keywords: [/KDV/, /kdvonline/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'up', shortArticles: true },
+  },
+  {
+    // «Реализация товаров»: №, Артикул (= штрихкод), Товар, Количество и единица, Цена, Сумма; без НДС
+    id: 'qazaq-trade',
+    name: 'ИП Qazaq Trade',
+    bins: [],
+    // только строка «Поставщик»: печать «ИП QAZAQ TRADE» видна на краю соседних накладных в стопке
+    keywords: [/Поставщик.*Q[a-zа-я]{2}aq/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'nearest', nameSide: 'right' },
   },
 ];
 

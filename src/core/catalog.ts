@@ -16,12 +16,14 @@ export interface CatalogItem {
   unit?: string;
   /** Поставщик, как он назван в UMAG */
   supplier?: string;
+  /** Закупочная цена в UMAG — обычно равна цене в накладной, помогает отличить 0,45 л от 0,9 л */
+  price?: number;
 }
 
 const KEY = 'umag-ocr.catalog.v1';
 
 /** Компактное хранение: 9 тыс. товаров объектами не помещаются в localStorage с запасом */
-type Packed = { v: 2; rows: [string, string, string, string, string][] };
+type Packed = { v: 2; rows: [string, string, string, string, string, number?][] };
 
 export function loadCatalog(): CatalogItem[] {
   try {
@@ -29,8 +31,9 @@ export function loadCatalog(): CatalogItem[] {
     if (!raw) return [];
     const data = JSON.parse(raw) as CatalogItem[] | Packed;
     if (Array.isArray(data)) return data;
-    return data.rows.map(([name, barcode, unit, supplier, extra]) => ({
+    return data.rows.map(([name, barcode, unit, supplier, extra, price]) => ({
       name, barcode, unit: unit || undefined, supplier: supplier || undefined, extra: extra ? extra.split(';') : undefined,
+      price: price || undefined,
     }));
   } catch {
     return [];
@@ -39,7 +42,7 @@ export function loadCatalog(): CatalogItem[] {
 
 export function saveCatalog(items: CatalogItem[]): boolean {
   try {
-    const packed: Packed = { v: 2, rows: items.map((i) => [i.name, i.barcode, i.unit ?? '', i.supplier ?? '', (i.extra ?? []).join(';')]) };
+    const packed: Packed = { v: 2, rows: items.map((i) => [i.name, i.barcode, i.unit ?? '', i.supplier ?? '', (i.extra ?? []).join(';'), i.price ?? 0]) };
     localStorage.setItem(KEY, JSON.stringify(packed));
     return true;
   } catch {
@@ -67,7 +70,7 @@ export function parseCatalogData(data: ArrayBuffer | Uint8Array): CatalogItem[] 
     const col = (re: RegExp) => head!.findIndex((c) => re.test(c));
     const nameCol = col(/назв|наимен/), codeCol = col(/штрих|barcode|баркод/);
     const extraCols = [col(/доп.*код/), col(/ntin|нкт/)].filter((c) => c >= 0);
-    const unitCol = col(/ед\.?\s*изм|единиц/), supCol = col(/поставщ/);
+    const unitCol = col(/ед\.?\s*изм|единиц/), supCol = col(/поставщ/), priceCol = col(/закуп/);
     for (let r = start; r < rows.length; r++) {
       const row = rows[r] ?? [];
       const name = String(row[nameCol] ?? '').trim();
@@ -81,6 +84,7 @@ export function parseCatalogData(data: ArrayBuffer | Uint8Array): CatalogItem[] 
         extra: extra.length ? extra : undefined,
         unit: unitCol >= 0 ? String(row[unitCol] ?? '').trim() || undefined : undefined,
         supplier: supCol >= 0 ? String(row[supCol] ?? '').trim() || undefined : undefined,
+        price: priceCol >= 0 ? Number(String(row[priceCol] ?? '').replace(/\s/g, '').replace(',', '.')) || undefined : undefined,
       });
     }
   }
@@ -177,26 +181,72 @@ export interface CatalogQuery {
   supplier?: string;
   /** NTIN или другой код из накладной, который может совпасть со штрихкодом в UMAG */
   codes?: string[];
+  /** Цена за единицу в накладной — сравнивается с закупочной ценой в UMAG */
+  price?: number;
 }
+
+export type MatchConfidence = 'high' | 'medium' | 'low';
 
 export interface CatalogMatch {
   item: CatalogItem;
   score: number;
   /** Как найдено: по коду (надёжно) или по похожему названию (возможны ошибки) */
   by: 'code' | 'name';
+  /** Насколько совпадение уверенное — чтобы при проверке смотреть внимательнее на низкие */
+  confidence: MatchConfidence;
 }
 
-interface Entry { item: CatalogItem; tri: Set<string>; words: Set<string>; sizes: number[] }
+interface Word { w: string; tri: Set<string>; weight: number }
+interface Entry { item: CatalogItem; tri: Set<string>; words: Word[]; sizes: number[] }
+
+const toWords = (name: string): Word[] => [...wordsOf(name)].map((w) => ({ w, tri: trigrams(w), weight: WEAK.test(w) ? 0.5 : 1 }));
+
+/**
+ * Похожесть слов 0…1 с учётом того, что в накладной и в UMAG названия пишут по-разному:
+ * сокращения («shokol» из «шокол-е» ↔ «shokoladnoe»), транслит и опечатки
+ * («syurpriz» ↔ «surprise»), ошибки OCR в отдельных буквах.
+ */
+function wordSim(a: Word, b: Word): number {
+  if (a.w === b.w) return 1;
+  const short = Math.min(a.w.length, b.w.length);
+  if (short >= 4 && (a.w.startsWith(b.w) || b.w.startsWith(a.w))) return 0.85;
+  if (short < 3) return 0;
+  const d = dice(a.tri, b.tri);
+  return d >= 0.4 ? d : 0;
+}
+
+/** Сколько «веса» слов из from нашлось в to (каждое слово — по лучшему совпадению) */
+function matched(from: Word[], to: Word[]): { sum: number; strong: boolean } {
+  let sum = 0, strong = false;
+  for (const a of from) {
+    let best = 0;
+    for (const b of to) { const v = wordSim(a, b); if (v > best) best = v; if (best === 1) break; }
+    sum += best * a.weight;
+    if (best >= 0.6 && a.weight === 1) strong = true;
+  }
+  return { sum, strong };
+}
+
+const weightOf = (ws: Word[]) => ws.reduce((a, w) => a + w.weight, 0);
+/** Ключи для быстрого отбора кандидатов: начало слова (4 буквы) или короткое слово целиком */
+const keyOf = (w: string) => w.slice(0, 4);
 
 export class CatalogIndex {
   private items: Entry[];
   private byBarcode: Map<string, CatalogItem>;
+  private byKey = new Map<string, Entry[]>();
 
   constructor(items: CatalogItem[]) {
     // «Новый продукт» — заготовки без названия, для поиска по названию бесполезны
     this.items = items.filter((i) => !/^новый продукт/i.test(i.name)).map((item) => ({
-      item, tri: trigrams(normalizeName(item.name)), words: wordsOf(item.name), sizes: sizesOf(item.name),
+      item, tri: trigrams(normalizeName(item.name)), words: toWords(item.name), sizes: sizesOf(item.name),
     }));
+    for (const e of this.items) {
+      for (const k of new Set(e.words.map((w) => keyOf(w.w)))) {
+        const list = this.byKey.get(k);
+        if (list) list.push(e); else this.byKey.set(k, [e]);
+      }
+    }
     this.byBarcode = new Map();
     for (const i of items) for (const c of [i.barcode, ...(i.extra ?? [])]) if (!this.byBarcode.has(c)) this.byBarcode.set(c, i);
   }
@@ -227,15 +277,18 @@ export class CatalogIndex {
   }
 
   /** Оценка похожести товара из накладной на товар каталога, 0…1+ */
-  private score(q: { tri: Set<string>; words: Set<string>; sizes: number[]; unit?: string; supplier?: string }, e: Entry): number {
-    let common = 0, strong = 0;
-    for (const w of q.words) if (e.words.has(w)) { common++; if (!WEAK.test(w)) strong++; }
-    if (!strong) return 0; // ни одного значимого общего слова — не тот товар
-    // Сходство слов и доля слов каталожного названия, найденных в накладной: короткое «сосиски»
-    // не должно перевешивать точное «сосиски мусульманские 380гр»
-    const wordDice = (2 * common) / (q.words.size + e.words.size);
-    const coverage = common / Math.max(1, e.words.size);
-    let s = 0.45 * dice(q.tri, e.tri) + 0.3 * wordDice + 0.25 * coverage;
+  private score(q: { tri: Set<string>; words: Word[]; sizes: number[]; unit?: string; supplier?: string; price?: number }, e: Entry): number {
+    const fwd = matched(q.words, e.words);
+    const back = matched(e.words, q.words);
+    const qw = weightOf(q.words), ew = weightOf(e.words);
+    if (!qw || !ew || fwd.sum === 0) return 0;
+    // Сходство слов в обе стороны и доля слов каталожного названия, найденных в накладной:
+    // короткое «сосиски» не должно перевешивать точное «сосиски мусульманские 380гр»
+    const wordDice = (fwd.sum + back.sum) / (qw + ew);
+    const coverage = Math.min(1, back.sum / ew);
+    let s = 0.35 * dice(q.tri, e.tri) + 0.35 * wordDice + 0.3 * coverage;
+    // совпали только общие слова («спред», «колбаса») — совпадение слабое
+    if (!fwd.strong) s *= 0.6;
     if (q.sizes.length && e.sizes.length) {
       const same = (x: number, y: number) => Math.abs(x - y) <= Math.max(0.001, y * 0.03);
       // «0,38 кг» OCR читает как «38 кг»: те же цифры с другим порядком — не штрафуем
@@ -246,28 +299,41 @@ export class CatalogIndex {
     const kg = (u?: string) => /^кг|kg/i.test(u ?? '');
     if (q.unit && e.item.unit) s += kg(q.unit) === kg(e.item.unit) ? 0.03 : -0.15;
     if (q.supplier && sameSupplier(q.supplier, e.item.supplier)) s += 0.12;
+    // Закупочная цена в UMAG обычно ровно равна цене в накладной (у блока сигарет — ×10 цены пачки)
+    if (q.price && q.price > 1 && e.item.price) {
+      const r = q.price / e.item.price;
+      const near = (k: number, tol: number) => Math.abs(r / k - 1) <= tol;
+      s += near(1, 0.02) ? 0.25 : near(1, 0.15) || near(10, 0.02) ? 0.12 : 0;
+    }
     return s;
   }
 
   /**
-   * Лучший товар каталога для строки накладной без штрихкода: сначала по кодам (NTIN),
-   * затем по названию. По названию возвращаем только уверенное совпадение с отрывом от второго.
+   * Самый вероятный товар каталога для строки накладной без штрихкода: сначала по кодам (NTIN),
+   * затем по названию. Возвращается лучший вариант, даже неуверенный, — пользователь проверяет сам;
+   * confidence подсказывает, насколько ему верить.
    */
   match(query: CatalogQuery): CatalogMatch | undefined {
     for (const c of query.codes ?? []) {
       const item = this.byCode(c);
-      if (item) return { item, score: 1, by: 'code' };
+      if (item) return { item, score: 1, by: 'code', confidence: 'high' };
     }
-    const q = { tri: trigrams(normalizeName(query.name)), words: wordsOf(query.name), sizes: sizesOf(query.name), unit: query.unit, supplier: query.supplier };
-    if (q.words.size === 0 || q.tri.size < 4) return undefined;
+    const q = { tri: trigrams(normalizeName(query.name)), words: toWords(query.name), sizes: sizesOf(query.name), unit: query.unit, supplier: query.supplier, price: query.price };
+    if (!q.words.length || q.tri.size < 4) return undefined;
+    // Кандидаты — товары с общим началом слова (с опечатками в первых буквах не найдём, это приемлемо)
+    const cands = new Set<Entry>();
+    for (const w of q.words) for (const e of this.byKey.get(keyOf(w.w)) ?? []) cands.add(e);
     let best: Entry | undefined, bestScore = 0, second = 0;
-    for (const e of this.items) {
+    for (const e of cands) {
       const sc = this.score(q, e);
       // второй — лучший из товаров с другим штрихкодом (дубли одного товара не мешают)
       if (sc > bestScore) { if (best && best.item.barcode !== e.item.barcode) second = bestScore; bestScore = sc; best = e; }
       else if (sc > second && e.item.barcode !== best?.item.barcode) second = sc;
     }
-    if (!best || bestScore < 0.55 || bestScore - second < 0.04) return undefined;
-    return { item: best.item, score: bestScore, by: 'name' };
+    // совсем непохожее не подставляем: хотя бы одно слово должно совпасть по существу
+    if (!best || bestScore < 0.3) return undefined;
+    const margin = bestScore - second;
+    const confidence: MatchConfidence = bestScore >= 0.75 && margin >= 0.05 ? 'high' : bestScore >= 0.5 && margin >= 0.02 ? 'medium' : 'low';
+    return { item: best.item, score: bestScore, by: 'name', confidence };
   }
 }

@@ -9,6 +9,7 @@ import { CatalogIndex, type CatalogItem } from '../src/core/catalog';
 import { itemMapCode } from '../src/core/mapping';
 import type { ParsedDoc, ParsedItem } from '../src/core/types';
 import { applyCatalog, applyCatalogNames, enrichDoc, patchItem } from '../src/app/model';
+import { isValidEan } from '../src/core/numbers';
 
 const catalogItems: CatalogItem[] = [
   { name: 'Карамель Рошен эвкалипт-ментол 1кг', barcode: '4823077604553', unit: 'кг' },
@@ -67,6 +68,23 @@ const cleared = applyCatalogNames(applyCatalog(d, undefined), undefined);
 check(cleared.items[0].name === 'КАРАМЕЛЬ Рошен эвкалипт-ментол КрКФ 1xr' && !cleared.items[0].nameSource, 'названия вернулись к накладной');
 check(!cleared.items[1].barcode && cleared.items[1].name === 'Camel Aroma Red', 'автоподобранный штрихкод убран, название из накладной');
 check(cleared.items[3].barcode === '4600000000028' && cleared.items[3].name === 'PARLTAMENT AQUA BLUE', 'штрихкод из справочника остался, название из накладной');
+
+console.log('Штрихкод с ошибкой OCR исправляется по каталогу');
+// 4823077604553 прочитан как 4823077604563: контрольная цифра не сходится, в каталоге — ровно один похожий
+const misread: ParsedDoc = { ...doc, items: [item({ name: 'КАРАМЕЛЬ Рошен', barcode: '4823077604563', code: '4823077604563', barcodeSource: 'invoice' }),
+  // соседний вкус той же марки: верный EAN, отличается от каталожного в двух цифрах, названия похожи
+  item({ name: 'КАРАМЕЛЬ Рошен эвкалипт', barcode: '4823077604546', barcodeSource: 'invoice' })] };
+const fx = applyCatalogNames(applyCatalog(misread, catalog), catalog);
+check(fx.items[0].barcode === '4823077604553' && fx.items[0].barcodeSource === 'catalog' && fx.items[0].catalogMatch?.by === 'fix'
+  && fx.items[0].ocrBarcode === '4823077604563', 'неверная контрольная цифра, в каталоге один похожий → исправлен');
+check(fx.items[0].name === 'Карамель Рошен эвкалипт-ментол 1кг', '…и название из каталога');
+check(isValidEan('4823077604546') && fx.items[1].barcode === '4823077604546' && fx.items[1].barcodeSource === 'invoice',
+  'верный EAN, которого нет в каталоге (новый товар или соседний вкус), не трогаем');
+const fxAgain = applyCatalog(fx, catalog);
+check(fxAgain.items[0].barcode === '4823077604553' && fxAgain.items[0].ocrBarcode === '4823077604563', 'повторный пересчёт исправления не ломает');
+const fxCleared = applyCatalog(fx, undefined);
+check(fxCleared.items[0].barcode === '4823077604563' && fxCleared.items[0].barcodeSource === 'invoice' && !fxCleared.items[0].ocrBarcode,
+  'каталог очищен → штрихкод как в накладной');
 
 console.log(fails ? `\nОшибок: ${fails}` : '\nНазвания из каталога: все проверки пройдены');
 process.exit(fails ? 1 : 0);

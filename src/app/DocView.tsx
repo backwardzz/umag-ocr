@@ -152,8 +152,8 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           В файл: {s.exportable} из {s.rows}{s.missingBarcode ? ` · ${s.missingBarcode} без штрихкода` : ''}
         </span>
         {merged > 0 && (
-          <span className="chip" title="UMAG ищет товар по штрихкоду, поэтому строки с одинаковым штрихкодом (например, бонусные по 1 ₸) складываются в одну: количество суммируется, цена — средняя">
-            Одинаковые штрихкоды сложены: {dataRows} строк в файле
+          <span className="chip" title="Строки с одинаковым штрихкодом (например, бонусные по 1 ₸) или с одинаковым названием из базы UMAG складываются в одну: количество суммируется, цена — средняя, штрихкод — из первой строки">
+            Одинаковые товары сложены: {dataRows} строк в файле
           </span>
         )}
       </div>
@@ -174,8 +174,8 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           <ItemsTable items={doc.items} catalog={catalog} onChange={onItemChange} onRemove={onItemRemove} onAdd={onItemAdd} />
           {autofilled > 0 && (
             <p className="autofill-note">
-              <IconAlert /> Штрихкоды в {autofilled} {plural(autofilled, 'строке', 'строках', 'строках')} заполнены автоматически
-              по каталогу UMAG (такие строки отмечены «автозаполнение»). Возможны ошибки: сверьте товар и нажмите «верно» —
+              <IconAlert /> Штрихкоды в {autofilled} {plural(autofilled, 'строке', 'строках', 'строках')} заполнены или исправлены автоматически
+              по каталогу UMAG (такие строки отмечены «автозаполнение» или «исправлен по каталогу»). Возможны ошибки: сверьте товар и нажмите «верно» —
               подтверждённый штрихкод запомнится и в следующий раз подставится без пометки.
             </p>
           )}

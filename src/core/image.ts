@@ -152,22 +152,59 @@ export function toGray(rgba: ArrayLike<number>, w: number, h: number, suppressCo
  * и заполняем дыры в ней (тёмные печати/таблицы внутри листа).
  * Возвращает функцию inside(x, y).
  */
-export function paperMask(g: Gray, block = 24): (x: number, y: number) => boolean {
+export function paperMask(g: Gray, block = 24, growth = { step: 0.92, floor: 0.5 }): (x: number, y: number) => boolean {
   const bw = Math.ceil(g.w / block), bh = Math.ceil(g.h / block);
+  // Средняя яркость блока и яркость бумаги в нём (70-й перцентиль — не зависит от плотности текста)
   const mean = new Float32Array(bw * bh);
+  const paperOf = new Float32Array(bw * bh);
+  const hist = new Uint16Array(256);
   for (let by = 0; by < bh; by++) {
     for (let bx = 0; bx < bw; bx++) {
+      hist.fill(0);
       let s = 0, c = 0;
       for (let y = by * block; y < Math.min(g.h, (by + 1) * block); y += 2) {
-        for (let x = bx * block; x < Math.min(g.w, (bx + 1) * block); x += 2) { s += g.d[y * g.w + x]; c++; }
+        for (let x = bx * block; x < Math.min(g.w, (bx + 1) * block); x += 2) { const v = g.d[y * g.w + x]; hist[v]++; s += v; c++; }
       }
+      let acc = 0, v = 0;
+      for (; v < 255; v++) { acc += hist[v]; if (acc >= c * 0.7) break; }
       mean[by * bw + bx] = s / c;
+      paperOf[by * bw + bx] = v;
     }
   }
-  const sorted = Array.from(mean).sort((a, b) => a - b);
-  const paper = sorted[Math.floor(sorted.length * 0.85)];
+  const pct85 = (a: Float32Array) => Array.from(a).sort((x, y) => x - y)[Math.floor(a.length * 0.85)];
+  const paper = pct85(mean), paperP = pct85(paperOf);
   const bright = new Uint8Array(bw * bh);
   for (let i = 0; i < bright.length; i++) bright[i] = mean[i] > paper * 0.72 ? 1 : 0;
+  // Тень на листе темнеет плавно, а край листа (стол, коврик) — скачком: доращиваем лист в соседние
+  // блоки, бумага в которых не более чем на 8% темнее уже найденной (плотный столбец сумм в тени
+  // по средней яркости темнее порога и иначе отрезался бы как фон)
+  const base = bright.slice();
+  const grow: number[] = [];
+  for (let i = 0; i < bright.length; i++) if (bright[i]) grow.push(i);
+  while (grow.length) {
+    const p = grow.pop()!;
+    const x = p % bw, y = (p - x) / bw;
+    for (const q of [x > 0 ? p - 1 : -1, x < bw - 1 ? p + 1 : -1, y > 0 ? p - bw : -1, y < bh - 1 ? p + bw : -1]) {
+      if (q < 0 || bright[q] || paperOf[q] < paperOf[p] * growth.step || paperOf[q] < paperP * growth.floor) continue;
+      bright[q] = 1;
+      grow.push(q);
+    }
+  }
+  // Доращённое мелкими кусками — не тень на листе, а соседний лист или узор коврика по краям:
+  // такие куски (меньше 2,5% кадра) убираем, чтобы не добавлять OCR мусора
+  const seen = new Uint8Array(bw * bh);
+  for (let i = 0; i < bright.length; i++) {
+    if (!bright[i] || base[i] || seen[i]) continue;
+    const comp = [i];
+    seen[i] = 1;
+    for (let k = 0; k < comp.length; k++) {
+      const p = comp[k], x = p % bw, y = (p - x) / bw;
+      for (const q of [x > 0 ? p - 1 : -1, x < bw - 1 ? p + 1 : -1, y > 0 ? p - bw : -1, y < bh - 1 ? p + bw : -1]) {
+        if (q >= 0 && bright[q] && !base[q] && !seen[q]) { seen[q] = 1; comp.push(q); }
+      }
+    }
+    if (comp.length < bright.length * 0.025) for (const p of comp) bright[p] = 0;
+  }
   // крупнейшая связная область светлых блоков
   const label = new Int32Array(bw * bh).fill(-1);
   let bestLabel = -1, bestSize = 0, cur = 0;

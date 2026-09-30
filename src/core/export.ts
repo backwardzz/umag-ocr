@@ -50,31 +50,43 @@ export function exportableItems(doc: ParsedDoc): ParsedItem[] {
 interface ExportLine { it: ParsedItem; qty?: number; price?: number; unit?: string; sum?: number }
 
 /**
+ * Ключ слияния строк: штрихкод, а для названий из каталога UMAG — само название.
+ * В базе один товар бывает заведён под разными штрихкодами с одинаковым названием —
+ * такие строки складываем в одну (штрихкод берётся из первой).
+ */
+function mergeKey(it: ParsedItem): string {
+  if (it.nameSource === 'catalog' && it.name.trim()) return `name:${it.name.trim().toLowerCase().replace(/\s+/g, ' ')}`;
+  return `bc:${it.barcode}`;
+}
+
+/**
  * Строки файла. Одинаковые штрихкоды (бонусный товар отдельной строкой по 1 ₸,
  * одна позиция на двух страницах) складываем: UMAG при импорте ищет товар по штрихкоду,
- * и две строки с одним штрихкодом могут не сложиться. Цена — средняя: сумма / количество.
+ * и две строки с одним штрихкодом могут не сложиться. Так же складываем строки с одинаковым
+ * названием из каталога UMAG (см. mergeKey). Цена — средняя: сумма / количество.
  */
 export function exportLines(doc: ParsedDoc, s: ExportSettings): ExportLine[] {
-  const byBarcode = new Map<string, ExportLine>();
+  const byKey = new Map<string, ExportLine>();
   for (const it of exportableItems(doc)) {
     const { qty, price, unit } = qtyPrice(it, s.qtyMode);
     const sum = it.sum ?? (qty !== undefined && price !== undefined ? round2(qty * price) : undefined);
-    const prev = byBarcode.get(it.barcode!);
+    const key = mergeKey(it);
+    const prev = byKey.get(key);
     if (!prev) {
-      byBarcode.set(it.barcode!, { it, qty, price, unit, sum });
+      byKey.set(key, { it, qty, price, unit, sum });
       continue;
     }
     prev.qty = Math.round(((prev.qty ?? 0) + (qty ?? 0)) * 1000) / 1000;
     prev.sum = round2((prev.sum ?? 0) + (sum ?? 0));
     if (prev.qty) prev.price = round2(prev.sum / prev.qty);
   }
-  return [...byBarcode.values()];
+  return [...byKey.values()];
 }
 
-/** Сколько строк накладной сольются с другими в файле (одинаковый штрихкод) */
+/** Сколько строк накладной сольются с другими в файле (одинаковый штрихкод или название из каталога) */
 export function mergedLineCount(doc: ParsedDoc): number {
   const items = exportableItems(doc);
-  return items.length - new Set(items.map((it) => it.barcode)).size;
+  return items.length - new Set(items.map(mergeKey)).size;
 }
 
 export function buildRows(doc: ParsedDoc, s: ExportSettings): (string | number)[][] {
@@ -135,8 +147,10 @@ export function toReportBlob(docs: ParsedDoc[]): Blob {
         it.n, it.barcode ?? '', it.code ?? '', it.name, it.invoiceName && it.invoiceName !== it.name ? it.invoiceName : '', it.unit ?? '', it.qty ?? '',
         it.pack ? `${it.pack.count} x ${it.pack.size}` : '', it.price ?? '', it.sum ?? '', it.vat ?? '',
         [
-          ...(it.barcodeSource === 'catalog' ? [`Штрихкод — автозаполнение из каталога UMAG («${it.catalogMatch?.name ?? ''}»), возможна ошибка`] : []),
-          ...it.issues.filter((x) => x.level !== 'info').map((x) => x.text),
+          ...(it.barcodeSource === 'catalog' ? [it.catalogMatch?.by === 'fix'
+            ? `Штрихкод исправлен по каталогу UMAG: в накладной прочитано ${it.ocrBarcode ?? ''}, похожий — «${it.catalogMatch.name}»`
+            : `Штрихкод — автозаполнение из каталога UMAG («${it.catalogMatch?.name ?? ''}»), возможна ошибка`] : []),
+          ...it.issues.filter((x) => x.level !== 'info' && !(x.kind === 'ean' && it.barcodeSource !== 'invoice')).map((x) => x.text),
         ].join('; '),
       ]);
     }
