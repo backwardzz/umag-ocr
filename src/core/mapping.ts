@@ -28,9 +28,10 @@ export const mapKey = (supplier: string, code: string) => `${supplier}::${code}`
  * Ключ товара в справочнике: код поставщика, а если кодов в накладной нет
  * (MAYAN, Карлсберг Пепси) — нормализованное название с префиксом «name:».
  */
-export function itemMapCode(it: { code?: string; name: string }): string | undefined {
+export function itemMapCode(it: { code?: string; name: string; invoiceName?: string }): string | undefined {
   if (it.code) return it.code;
-  const n = normalizeName(it.name);
+  // по названию из накладной: name могло быть заменено названием из каталога
+  const n = normalizeName(it.invoiceName ?? it.name);
   return n.length >= 4 ? `name:${n}` : undefined;
 }
 

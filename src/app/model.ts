@@ -1,7 +1,7 @@
 import { isValidEan, round2, near } from '../core/numbers';
 import { itemMapCode, mapKey, supplierKey, type MapEntry, type MappingStore } from '../core/mapping';
 import { nameSimilarity, type CatalogIndex } from '../core/catalog';
-import { issue, type Issue, type ParsedDoc, type ParsedItem } from '../core/types';
+import { issue, sourceName, type Issue, type ParsedDoc, type ParsedItem } from '../core/types';
 
 export type DocStatus = 'queued' | 'processing' | 'done' | 'error';
 
@@ -36,7 +36,7 @@ function containsItems(a: ParsedDoc, b: ParsedDoc): boolean {
   const pool = [...a.items];
   return b.items.every((it) => {
     const i = pool.findIndex((x) => near(x.sum, it.sum, 0.05) && near(x.qty, it.qty, 0.001)
-      && (it.barcode || it.code ? (x.barcode ?? x.code) === (it.barcode ?? it.code) : nameSimilarity(x.name, it.name) > 0.6));
+      && (it.barcode || it.code ? (x.barcode ?? x.code) === (it.barcode ?? it.code) : nameSimilarity(sourceName(x), sourceName(it)) > 0.6));
     if (i < 0) return false;
     pool.splice(i, 1);
     return true;
@@ -98,7 +98,7 @@ export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
       // OCR читает название каждый раз чуть по-разному — ищем самое похожее из запомненных
       let best: MapEntry | undefined, score = 0;
       for (const [k, v] of byName) {
-        const sc = nameSimilarity(it.name, v.name ?? k.split('::name:')[1]);
+        const sc = nameSimilarity(sourceName(it), v.name ?? k.split('::name:')[1]);
         if (sc > score) { score = sc; best = v; }
       }
       if (!best || score < 0.72) return it;
@@ -139,12 +139,41 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
       changed = true;
     }
     if (cur.barcode || !catalog?.size || !cur.qty) return cur;
-    const m = catalog.match({ name: cur.name, unit: cur.unit, supplier: doc.supplier, codes: [...(cur.extraCodes ?? []), ...(cur.code ? [cur.code] : [])] });
+    const m = catalog.match({ name: sourceName(cur), unit: cur.unit, supplier: doc.supplier, codes: [...(cur.extraCodes ?? []), ...(cur.code ? [cur.code] : [])] });
     if (!m) return cur;
     changed = true;
     return { ...cur, barcode: m.item.barcode, barcodeSource: 'catalog' as const, catalogMatch: { name: m.item.name, by: m.by } };
   });
   return changed ? { ...doc, items } : doc;
+}
+
+/**
+ * Названия из каталога UMAG: если штрихкод строки есть в загруженной базе (из накладной,
+ * из справочника, подобран по названию или введён вручную), название берём из базы —
+ * в файл для UMAG попадёт название как в магазине. Название из накладной сохраняется
+ * в invoiceName (по нему идёт поиск). Название, исправленное вручную, не трогаем.
+ * Если штрихкода в базе больше нет (каталог очищен, штрихкод изменён) — возвращаем название из накладной.
+ */
+export function applyCatalogNames(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc {
+  let changed = false;
+  const items = doc.items.map((it) => {
+    if (it.nameSource === 'manual') return it;
+    const found = it.barcode && catalog?.size ? catalog.get(it.barcode) : undefined;
+    if (found?.name.trim()) {
+      if (it.nameSource === 'catalog' && it.name === found.name) return it;
+      changed = true;
+      return { ...it, name: found.name, invoiceName: it.invoiceName ?? it.name, nameSource: 'catalog' as const };
+    }
+    if (it.nameSource !== 'catalog') return it;
+    changed = true;
+    return { ...it, name: it.invoiceName ?? it.name, nameSource: undefined };
+  });
+  return changed ? { ...doc, items } : doc;
+}
+
+/** Справочник → автозаполнение штрихкодов из каталога → названия из каталога */
+export function enrichDoc(doc: ParsedDoc, mapping: MappingStore, catalog?: CatalogIndex): ParsedDoc {
+  return applyCatalogNames(applyCatalog(applyMapping(doc, mapping), catalog), catalog);
 }
 
 /** Проверки, которые зависят от текущих данных (после правок пользователя) */
@@ -158,8 +187,8 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
         : 'Нет штрихкода — строка не попадёт в файл', 'barcode'));
   } else {
     if (it.barcodeSource === 'catalog' && it.catalogMatch) {
-      out.push(issue('warn', `Штрихкод — автозаполнение из каталога UMAG ${it.catalogMatch.by === 'code' ? 'по NTIN' : 'по названию'}: `
-        + `«${it.catalogMatch.name}». Возможна ошибка — сверьте`, 'autofill'));
+      out.push(issue('warn', `Штрихкод подобран из каталога UMAG ${it.catalogMatch.by === 'code' ? 'по NTIN' : `по названию из накладной «${sourceName(it)}»`}`
+        + ' — возможна ошибка, сверьте', 'autofill'));
     }
     if (!/^\d+$/.test(it.barcode)) out.push(issue('error', 'Штрихкод должен состоять только из цифр'));
     // Внутренние штрихкоды магазина (начинаются с 2) бывают без контрольной цифры
@@ -220,6 +249,11 @@ export function summarize(doc: ParsedDoc, catalog?: CatalogIndex): DocSummary {
 /** Правка строки: пересчитываем сумму, помечаем как проверенную пользователем */
 export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedItem {
   const next: ParsedItem = { ...it, ...patch, edited: true };
+  if ('name' in patch) {
+    // исправили вручную — больше не заменяем названием из каталога; исходное из накладной сохраняем для поиска
+    next.nameSource = 'manual';
+    next.invoiceName = it.invoiceName ?? (it.name || undefined);
+  }
   if ('qty' in patch || 'price' in patch) {
     if (next.qty !== undefined && next.price !== undefined) next.sum = round2(next.qty * next.price);
     if (next.pack && next.qty !== undefined) next.pack = { ...next.pack, count: round2(next.qty / next.pack.size) };
@@ -227,6 +261,8 @@ export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedIte
   if ('barcode' in patch) {
     next.barcodeSource = patch.barcode ? 'manual' : undefined;
     next.catalogMatch = undefined;
+    // другой товар — название снова берётся из каталога (applyCatalogNames)
+    if (patch.barcode !== it.barcode && next.nameSource === 'manual') next.nameSource = undefined;
   }
   return next;
 }

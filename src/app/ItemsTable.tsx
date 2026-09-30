@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
-import type { ParsedItem } from '../core/types';
+import { sourceName, type ParsedItem } from '../core/types';
 import { allIssues, worstLevel, money, qtyFmt } from './model';
 import { IconAlert, IconBarcode, IconCheck, IconPlus, IconX } from './Icons';
 
@@ -80,7 +80,7 @@ function focusNextEmptyBarcode(from: number) {
 export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props) {
   const rows = useMemo(() => items.map((it, i) => {
     const issues = allIssues(it, catalog);
-    const suggestions = !it.barcode && catalog && catalog.size ? catalog.suggest(it.name) : [];
+    const suggestions = !it.barcode && catalog && catalog.size ? catalog.suggest(sourceName(it)) : [];
     // тот же штрихкод выше (бонусная строка) — в файле строки сложатся
     const first = it.barcode ? items.findIndex((x) => x.barcode === it.barcode) : -1;
     return { it, issues, level: worstLevel(issues), suggestions, sameAs: first >= 0 && first < i ? first : undefined };
@@ -147,6 +147,14 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                 </td>
                 <td className="c-name">
                   <TextInput value={it.name} label={`Наименование, строка ${i + 1}`} onCommit={(v) => onChange(i, { name: v })} />
+                  {it.invoiceName && it.invoiceName !== it.name && (
+                    <div className="cell-sub">
+                      {it.nameSource === 'catalog' && (
+                        <span className="tag" title="Название взято из каталога UMAG по штрихкоду — так оно попадёт в файл">из базы</span>
+                      )}
+                      <span className="cell-sub__orig" title="Название, как оно напечатано в накладной">в накладной: {it.invoiceName}</span>
+                    </div>
+                  )}
                   {shown.length > 0 && (
                     <ul className="row-issues">
                       {shown.map((x, k) => <li key={k} className={`row-issue row-issue--${x.level}`}>{x.text}</li>)}

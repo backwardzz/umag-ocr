@@ -107,6 +107,11 @@ export function SettingsDrawer(p: Props) {
               сверьте товар и нажмите «верно». Ещё каталог подсказывает штрихкод в выпадающем списке и предупреждает,
               если товара из накладной нет в UMAG.
             </p>
+            <p className="muted">
+              <b>Названия берутся из каталога:</b> если штрихкод строки есть в каталоге (из накладной, из справочника,
+              подобран автоматически или введён вручную), название заменяется названием из UMAG — так оно и попадёт в файл.
+              Название из накладной видно под ним серым. Если исправить название вручную, оно больше не заменяется.
+            </p>
             <p><b>{p.catalogSize ? `Загружено товаров: ${p.catalogSize}` : 'Каталог не загружен'}</b></p>
             <div className="row-btns">
               <button type="button" className="btn btn--primary" onClick={() => catRef.current?.click()}>Загрузить файл UMAG</button>
@@ -119,7 +124,7 @@ export function SettingsDrawer(p: Props) {
               try {
                 const items = await parseCatalogFile(f);
                 p.onCatalog(items);
-                p.toast(`Каталог загружен: ${items.length} товаров — штрихкоды заполнены автоматически там, где их не было`);
+                p.toast(`Каталог загружен: ${items.length} товаров — штрихкоды заполнены там, где их не было, названия взяты из каталога`);
               } catch (err) {
                 p.toast(String((err as Error).message ?? err));
               }

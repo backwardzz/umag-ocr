@@ -128,11 +128,11 @@ export function toReportBlob(docs: ParsedDoc[]): Blob {
     const rows: (string | number)[][] = [
       ['Поставщик', d.supplier ?? '', '№', d.number ?? '', 'Дата', d.date ?? ''],
       [],
-      ['№', 'Штрихкод', 'Код поставщика', 'Наименование', 'Ед.', 'Кол-во', 'Упаковка', 'Цена с НДС', 'Сумма с НДС', 'НДС', 'Замечания'],
+      ['№', 'Штрихкод', 'Код поставщика', 'Наименование', 'Наименование в накладной', 'Ед.', 'Кол-во', 'Упаковка', 'Цена с НДС', 'Сумма с НДС', 'НДС', 'Замечания'],
     ];
     for (const it of d.items) {
       rows.push([
-        it.n, it.barcode ?? '', it.code ?? '', it.name, it.unit ?? '', it.qty ?? '',
+        it.n, it.barcode ?? '', it.code ?? '', it.name, it.invoiceName && it.invoiceName !== it.name ? it.invoiceName : '', it.unit ?? '', it.qty ?? '',
         it.pack ? `${it.pack.count} x ${it.pack.size}` : '', it.price ?? '', it.sum ?? '', it.vat ?? '',
         [
           ...(it.barcodeSource === 'catalog' ? [`Штрихкод — автозаполнение из каталога UMAG («${it.catalogMatch?.name ?? ''}»), возможна ошибка`] : []),
@@ -140,10 +140,10 @@ export function toReportBlob(docs: ParsedDoc[]): Blob {
         ].join('; '),
       ]);
     }
-    rows.push([], ['', '', '', 'Итого по строкам', '', '', '', '', round2(d.items.reduce((a, b) => a + (b.sum ?? 0), 0))]);
-    if (d.totals?.sum !== undefined) rows.push(['', '', '', 'Итого по накладной', '', '', '', '', d.totals.sum]);
+    rows.push([], ['', '', '', 'Итого по строкам', '', '', '', '', '', round2(d.items.reduce((a, b) => a + (b.sum ?? 0), 0))]);
+    if (d.totals?.sum !== undefined) rows.push(['', '', '', 'Итого по накладной', '', '', '', '', '', d.totals.sum]);
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{ wch: 4 }, { wch: 15 }, { wch: 12 }, { wch: 45 }, { wch: 6 }, { wch: 8 }, { wch: 10 }, { wch: 11 }, { wch: 12 }, { wch: 10 }, { wch: 50 }];
+    ws['!cols'] = [{ wch: 4 }, { wch: 15 }, { wch: 12 }, { wch: 45 }, { wch: 40 }, { wch: 6 }, { wch: 8 }, { wch: 10 }, { wch: 11 }, { wch: 12 }, { wch: 10 }, { wch: 50 }];
     let name = (d.supplier ?? 'Накладная').replace(/[\\/?*[\]:"]/g, '').slice(0, 24) + (d.number ? ` ${d.number}` : '');
     name = name.slice(0, 31);
     let n = 2;

@@ -3,8 +3,8 @@ import { recognizeInvoice } from './ocr/engine';
 import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from './core/mapping';
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
-import { issue, type ParsedDoc, type ParsedItem } from './core/types';
-import { applyCatalog, applyMapping, docSupplierKey, findRelated, mergePages, newItem, patchItem, type DocEntry } from './app/model';
+import { issue, sourceName, type ParsedDoc, type ParsedItem } from './core/types';
+import { applyCatalog, applyCatalogNames, applyMapping, docSupplierKey, enrichDoc, findRelated, mergePages, newItem, patchItem, type DocEntry } from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
 import { UploadZone } from './app/UploadZone';
 import { DocList } from './app/DocList';
@@ -34,11 +34,11 @@ export default function App() {
   const catalog = useMemo(() => (catalogItems.length ? new CatalogIndex(catalogItems) : undefined), [catalogItems]);
   const catalogRef = useRef(catalog);
   catalogRef.current = catalog;
-  // Каталог загрузили, заменили или очистили — пересчитываем автозаполнение во всех накладных
+  // Каталог загрузили, заменили или очистили — пересчитываем автозаполнение и названия во всех накладных
   const firstCatalog = useRef(true);
   useEffect(() => {
     if (firstCatalog.current) { firstCatalog.current = false; return; }
-    setDocs((prev) => prev.map((d) => (d.doc ? { ...d, doc: applyCatalog(d.doc, catalog) } : d)));
+    setDocs((prev) => prev.map((d) => (d.doc ? { ...d, doc: applyCatalogNames(applyCatalog(d.doc, catalog), catalog) } : d)));
   }, [catalog]);
 
   const toast = useCallback((t: string) => {
@@ -62,8 +62,9 @@ export default function App() {
       update(id, { status: 'processing', stage, progress: p });
     })
       .then((res) => {
-        // Сначала справочник (штрихкоды, подтверждённые пользователем), затем автозаполнение из каталога
-        const doc = applyCatalog(applyMapping(res.doc, mappingRef.current), catalogRef.current);
+        // Сначала справочник (штрихкоды, подтверждённые пользователем), затем автозаполнение из каталога,
+        // затем названия из каталога по найденным штрихкодам
+        const doc = enrichDoc(res.doc, mappingRef.current, catalogRef.current);
         const self = docsRef.current.find((d) => d.id === id);
         const rel = findRelated(docsRef.current, id, doc);
         if (rel?.kind === 'page' && self) {
@@ -138,7 +139,8 @@ export default function App() {
     if (!current?.doc) return;
     const doc = current.doc;
     const item = doc.items[index];
-    changeDoc(current.id, (d) => ({ ...d, items: d.items.map((it, i) => (i === index ? patchItem(it, patch) : it)) }));
+    // Новый штрихкод есть в каталоге — название сразу подтягивается из него
+    changeDoc(current.id, (d) => applyCatalogNames({ ...d, items: d.items.map((it, i) => (i === index ? patchItem(it, patch) : it)) }, catalogRef.current));
     // Штрихкод для кода поставщика (или названия, если кодов нет) — запоминаем
     // и подставляем в другие открытые накладные
     const code = itemMapCode(item);
@@ -146,11 +148,13 @@ export default function App() {
       const sk = docSupplierKey(doc);
       const m: MappingStore = {
         ...mappingRef.current,
-        [mapKey(sk, code)]: { barcode: patch.barcode, name: item.name, supplier: doc.supplier, updated: new Date().toISOString() },
+        // название из накладной: с ним сравниваются строки следующих накладных
+        [mapKey(sk, code)]: { barcode: patch.barcode, name: sourceName(item), supplier: doc.supplier, updated: new Date().toISOString() },
       };
       setMapping(m);
-      setDocs((prev) => prev.map((d) => (d.doc && d.id !== current.id && docSupplierKey(d.doc) === sk ? { ...d, doc: applyMapping(d.doc, m) } : d)));
-      toast(item.code ? `Запомнено: код ${item.code} → ${patch.barcode}` : `Запомнено: «${item.name}» → ${patch.barcode}`);
+      setDocs((prev) => prev.map((d) => (d.doc && d.id !== current.id && docSupplierKey(d.doc) === sk
+        ? { ...d, doc: applyCatalogNames(applyMapping(d.doc, m), catalogRef.current) } : d)));
+      toast(item.code ? `Запомнено: код ${item.code} → ${patch.barcode}` : `Запомнено: «${sourceName(item)}» → ${patch.barcode}`);
     }
   };
 

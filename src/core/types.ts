@@ -25,6 +25,13 @@ export interface ParsedItem {
   /** Строку правили вручную — замечания OCR к ней больше не актуальны */
   edited?: boolean;
   name: string;
+  /**
+   * Название, как оно напечатано в накладной (прочитано OCR). Заполняется, когда name
+   * заменено названием из каталога: по нему ищем товар в каталоге и в справочнике.
+   */
+  invoiceName?: string;
+  /** Откуда name: catalog — из каталога UMAG по штрихкоду, manual — исправлено вручную; нет — из накладной */
+  nameSource?: 'catalog' | 'manual';
   unit?: string;
   /** Количество в единицах учёта (шт/кг/пачка/бутылка) */
   qty?: number;
@@ -61,3 +68,6 @@ export interface ParsedDoc {
 }
 
 export const issue = (level: IssueLevel, text: string, kind?: string): Issue => (kind ? { level, text, kind } : { level, text });
+
+/** Название из накладной — для поиска в каталоге и справочнике (name могло быть заменено названием из каталога) */
+export const sourceName = (it: { name: string; invoiceName?: string }) => it.invoiceName ?? it.name;
