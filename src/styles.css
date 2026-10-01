@@ -228,7 +228,11 @@ button, input { font: inherit; color: inherit; }
 .c-name { min-width: 220px; }
 .c-num { width: 110px; min-width: 96px; text-align: right; }
 .items th.c-num { text-align: right; }
-.c-unit { width: 72px; min-width: 64px; }
+.c-unit { width: 88px; min-width: 80px; }
+/* «шт» мелким шрифтом читается как «шп»: единицы — крупнее, жирнее и с разрядкой */
+.c-unit .cell-input { font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
+/* стрелка списка подсказок съедает половину узкого поля — «пачка» и «блок» не помещаются */
+.c-unit .cell-input::-webkit-calendar-picker-indicator { display: none !important; }
 .c-sum { padding-top: 13px !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .c-st { width: 72px; white-space: nowrap; }
 .row--error { background: color-mix(in srgb, var(--err-soft) 55%, transparent); }
@@ -267,6 +271,7 @@ button, input { font: inherit; color: inherit; }
   height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 0 8px; font: inherit;
 }
 .rules__unit { width: 90px; }
+.bulk__unit, .rules__unit { font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
 .rules__num { width: 70px; text-align: right; }
 
 .cell-input {
