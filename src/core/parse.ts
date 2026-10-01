@@ -97,8 +97,11 @@ function addTextTotals(doc: ParsedDoc, page: OcrPage) {
   });
   if (!found.length) return;
   const match = found.find((x) => near(x, rows, tol));
+  // Итог не может быть намного меньше суммы строк: «Вес: 45,15» рядом со «Всего отпущено…» — не итог
+  const plausible = found.filter((x) => x >= rows * 0.5);
+  if (match === undefined && !plausible.length) return;
   const totals = doc.totals ?? {};
-  if (totals.sum === undefined) totals.sum = match ?? Math.max(...found);
+  if (totals.sum === undefined) totals.sum = match ?? Math.max(...plausible);
   totals.sumAlt = [...(totals.sumAlt ?? []), ...found.filter((x) => x !== totals.sum)];
   doc.totals = totals;
 }

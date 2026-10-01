@@ -84,6 +84,8 @@ export function mergePages(a: ParsedDoc, b: ParsedDoc): ParsedDoc {
 export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
   const sk = docSupplierKey(doc);
   const byName = Object.entries(mapping).filter(([k]) => k.startsWith(`${sk}::name:`));
+  const byCode = Object.entries(mapping).filter(([k]) => k.startsWith(`${sk}::`) && !k.startsWith(`${sk}::name:`))
+    .map(([k, v]) => [k.slice(sk.length + 2), v] as const);
   let changed = false;
   const items = doc.items.map((it) => {
     // автозаполнение из каталога справочник (подтверждённое пользователем) перекрывает
@@ -116,7 +118,19 @@ export function applyMapping(doc: ParsedDoc, mapping: MappingStore): ParsedDoc {
     }
     // Два прохода OCR прочитали код по-разному — известный справочнику вариант верный
     const alt = it.codeAlt ? mapping[mapKey(sk, it.codeAlt)] : undefined;
-    if (!alt) return it;
+    if (!alt) {
+      // У кодов поставщика нет контрольной цифры, и OCR ошибается в одной цифре («13730» вместо «73730»).
+      // Если в справочнике у этого поставщика ровно один код отличается одной цифрой и название похоже — это он
+      const code = it.code;
+      const close = byCode.filter(([c, v]) => digitDiff(c, code) === 1 && nameSimilarity(sourceName(it), v.name ?? '') >= 0.6);
+      if (close.length !== 1) return it;
+      const [known, entry] = close[0];
+      changed = true;
+      return {
+        ...it, code: known, codeAlt: code, barcode: entry.barcode, barcodeSource: 'mapping' as const, catalogMatch: undefined,
+        issues: [...it.issues.filter((x) => x.kind !== 'code'), issue('warn', `Код прочитан как ${code}, в справочнике есть ${known} с похожим названием — сверьте`, 'fuzzy')],
+      };
+    }
     changed = true;
     return {
       ...it, code: it.codeAlt, codeAlt: it.code, barcode: alt.barcode, barcodeSource: 'mapping' as const, catalogMatch: undefined,

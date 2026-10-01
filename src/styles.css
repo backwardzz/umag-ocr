@@ -375,3 +375,23 @@ button, input { font: inherit; color: inherit; }
   .docview { padding: 12px; }
   .c-name { min-width: 180px; }
 }
+
+/* Список принимаемых накладных (стартовая страница и окно справки) */
+.formats { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; text-align: left; }
+.formats__row {
+  display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.1fr); gap: 4px 14px; align-items: baseline;
+  padding: 8px 12px; border-top: 1px solid var(--border); font-size: 13.5px;
+}
+.formats__row:first-child { border-top: 0; }
+.formats__row--other { background: var(--surface-2); }
+.formats__name { font-weight: 600; overflow-wrap: anywhere; }
+.formats__goods { color: var(--muted); }
+.formats__code { color: var(--muted); font-size: 12.5px; }
+.formats__code--ok { color: var(--ok); }
+.formats__code--once, .formats__code--name { color: var(--warn); }
+.formats-box { width: 100%; max-width: 760px; margin-top: 6px; }
+.formats-box > summary { cursor: pointer; padding: 8px 4px; color: var(--primary); font-weight: 600; }
+.formats-box > summary:hover { text-decoration: underline; }
+@media (max-width: 560px) {
+  .formats__row { grid-template-columns: 1fr; gap: 2px; }
+}

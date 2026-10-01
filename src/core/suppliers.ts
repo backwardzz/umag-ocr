@@ -32,6 +32,11 @@ export interface Z2Options {
   /** Штрихкод не влез в ячейку: 12 цифр в строке кода, последняя цифра — строкой ниже (ЭльвиНиПлюс) */
   codeWrap?: boolean;
   /**
+   * Наименования читаются отдельным проходом OCR по своему столбцу: на мятом или снятом под углом листе
+   * с плотными двухстрочными названиями общий проход смешивает строки соседних товаров (ФудМастер)
+   */
+  nameStrip?: boolean;
+  /**
    * Где в строке стоят числа: на одной линии с кодом (center, по умолчанию),
    * внизу строки при коде у верхнего края (top) или на последней линии строки (bottom)
    */
@@ -41,6 +46,8 @@ export interface Z2Options {
 export interface SupplierDef {
   id: string;
   name: string;
+  /** Что поставляет — для списка «Какие накладные принимает система» в интерфейсе */
+  goods?: string;
   bins: string[];
   keywords: RegExp[];
   parser: ParserId;
@@ -50,6 +57,7 @@ export interface SupplierDef {
 export const SUPPLIERS: SupplierDef[] = [
   {
     id: 'grand-konditer',
+    goods: 'карамель, конфеты',
     name: 'ТОО "GRAND Кондитер"',
     bins: ['170340019202'],
     keywords: [/GRAND\s*Конд/i, /GRAND/],
@@ -58,6 +66,7 @@ export const SUPPLIERS: SupplierDef[] = [
   },
   {
     id: 'megapolis',
+    goods: 'сигареты',
     name: 'ТОО "ТК "Мегаполис-Казахстан"',
     bins: ['960740000122', '121141020357'],
     keywords: [/Мегапол/i, /МЕГАПОЛ/],
@@ -66,6 +75,7 @@ export const SUPPLIERS: SupplierDef[] = [
   },
   {
     id: 'set-kola',
+    goods: 'Coca-Cola, напитки',
     name: 'ТОО "Сэт Кола"',
     bins: ['180640007797'],
     keywords: [/С[эеa]т\s*Кола/i, /ВСЕГО\s+ПО\s+СЧЕТУ/i],
@@ -74,6 +84,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Ferrero, Mars и др.: штрихкоды EAN-8 и EAN-13, левее — «Артикул»; код у верхнего края строки, числа внизу
     id: 'prima',
+    goods: 'Ferrero, Kinder, Bonduelle',
     name: 'ТОО "Прима Дистрибьюшн"',
     bins: ['081241007741'],
     keywords: [/Прима\s*Дистр/i, /prima-group/i],
@@ -83,6 +94,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Сигареты блоками, номенклатурных номеров в накладной нет
     id: 'mayan',
+    goods: 'сигареты блоками',
     name: 'ТОО "MAYAN"',
     bins: ['210540001009'],
     // OCR читает «MAYAN» и как «МАУАМ» (кириллицей)
@@ -93,6 +105,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Форма З-8, коды из 11 цифр, есть столбцы «Вес тары», «% скидки», «Скидка»
     id: 'iskandyrov',
+    goods: 'колбасы',
     name: 'ИП Искандыров',
     bins: [],
     keywords: [/Искандыров/i],
@@ -102,6 +115,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Короткая накладная: Товар, Кол (упак), Кол-во, Цена, Сумма — без кодов
     id: 'carlsberg-pepsi',
+    goods: 'Pepsi, напитки',
     name: 'Карлсберг Пепси',
     bins: [],
     keywords: [/Карлсберг/i, /IM_KAZ/],
@@ -112,6 +126,7 @@ export const SUPPLIERS: SupplierDef[] = [
     // Упаковочный лист: код 6 цифр, наименование справа от кода (с NTIN), цена по прайсу и со скидкой.
     // Вторая страница без шапки — узнаём по «Внутренний номер» и NTIN.
     id: 'eurasian-foods',
+    goods: 'маргарин, спреды',
     name: 'АО "Евразиан Фудс Корпорэйшн"',
     bins: ['001041004585'],
     keywords: [/Евразиан/i, /Упаковочн\S*\s+лист/i, /Внутренн\S*\s+номер[\s\S]*NTIN|NTIN[\s\S]*Внутренн\S*\s+номер/i],
@@ -121,6 +136,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Штрихкод левее номенклатурного номера, столбец «Коробок», бонусные строки с тем же штрихкодом по 1 ₸
     id: 'bes-batyr',
+    goods: 'напитки, минеральная вода',
     name: 'ТОО "БЕС БАТЫР" Актобе',
     bins: [],
     keywords: [/БЕС\s*БАТЫР/i],
@@ -130,6 +146,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Расходная накладная: NTIN, Штрихкод, Товар (справа), Общее «12 бут», Кор, Штук, Цена, Сумма
     id: 'yupiter',
+    goods: 'Боржоми, минеральная вода',
     name: 'ТОО "Yupiter Aqtobe"',
     bins: [],
     // OCR читает название и как «Уирйег Agtobe»
@@ -140,6 +157,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Колбасы: штрихкод, код ТН ВЭД, «отпущено (кг)» между количеством и ценой
     id: 'nuraly-trans-kom',
+    goods: 'колбасы',
     name: 'ТОО "НұралыТрансКом"',
     bins: ['080540015288'],
     keywords: [/Н[ұуy]ралы\s*Транс/i],
@@ -150,6 +168,7 @@ export const SUPPLIERS: SupplierDef[] = [
     // Мороженое: наименование в 2 строки, штрихкод перенесён — 12 цифр в первой строке, последняя во второй;
     // номенклатурный номер («0349») и числа — во второй строке
     id: 'elvi-ni-plus',
+    goods: 'мороженое',
     name: 'ТОО "ЭльвиНиПлюс"',
     bins: [],
     keywords: [/Эльв[иu]\s*Н[иu]\s*П/i, /ЭльвиНи/i],
@@ -160,6 +179,7 @@ export const SUPPLIERS: SupplierDef[] = [
     // Молочка: штрихкод внутри наименования («… 100гр / ШК: 4605627007447»), количество «4,0000»,
     // цена и сумма по акции со скидкой
     id: 'green-house',
+    goods: 'йогурты, молочные продукты',
     name: 'Филиал ТОО "Green House Limited" Актобе',
     bins: ['201140022444'],
     keywords: [/Green\s*House/i],
@@ -170,6 +190,7 @@ export const SUPPLIERS: SupplierDef[] = [
     // Кондитерка и снеки: номенклатурный номер «ЯП104» перед штрихкодом, весовые товары «4,5 кг»,
     // суммы округлены до тенге (3,8 × 1 446 = 5 495)
     id: 'kdv',
+    goods: 'печенье, кондитерские изделия',
     name: 'ТОО "KDV Казахстан"',
     bins: ['041240000988'],
     keywords: [/KDV/, /kdvonline/i],
@@ -179,6 +200,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // «Реализация товаров»: №, Артикул (= штрихкод), Товар, Количество и единица, Цена, Сумма; без НДС
     id: 'qazaq-trade',
+    goods: 'колбасы, мясные нарезки',
     name: 'ИП Qazaq Trade',
     bins: [],
     // только строка «Поставщик»: печать «ИП QAZAQ TRADE» видна на краю соседних накладных в стопке
@@ -189,6 +211,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Расходная накладная (1С): №, Штрихкод, Товар (справа, в 2 строки), Количество и «шт», Цена, Сумма; числа у верхнего края строки
     id: 'ice-plus',
+    goods: 'молочные продукты «Айс»',
     name: 'ТОО "Айс-плюс"',
     bins: [],
     keywords: [/Айс[-\s]*плюс/i, /Нагыз|Нағыз/i],
@@ -198,6 +221,7 @@ export const SUPPLIERS: SupplierDef[] = [
   {
     // Алкоголь: Товар, Общее количество «3 бут», Коробок, Штук, Цена, Сумма; штрихкодов в накладной нет
     id: 'global-wine',
+    goods: 'алкоголь',
     name: 'ТОО "Global Wine Aktobe"',
     bins: [],
     keywords: [/Global\s*Wine/i, /Glob[a-z]{1,3}\s*W[il1]ne/i],
@@ -208,11 +232,24 @@ export const SUPPLIERS: SupplierDef[] = [
     // Zigi-Zagi: «Накладная на отпуск запасов», в «Номенклатурном номере» штрихкод EAN-13,
     // последняя цифра перенесена во вторую строку ячейки
     id: 'amad-trade',
+    goods: 'напитки Zigi-Zagi',
     name: 'ТОО "AMAD TRADE"',
     bins: ['250640022082'],
     keywords: [/AMAD\s*TRADE/i, /Zig[il]-?Zag/i],
     parser: 'z2',
     z2: { code: 'ean', nameDir: 'down', rowAlign: 'top', codeWrap: true },
+  },
+  {
+    // Молочка «ФМ», President: номенклатурный номер из 5–6 цифр, штрихкод напечатан картинкой (мелкие цифры
+    // под штрихами OCR не читает — штрихкод запоминается по номеру), название в 2 строки выше номера
+    id: 'foodmaster',
+    goods: 'молочные продукты «ФМ», President',
+    name: 'Филиал ТОО "Компания ФудМастер-Трэйд" Актобе',
+    bins: [],
+    // шапка с названием мелкая и читается плохо — узнаём и по товарам «… ФМ …»
+    keywords: [/Фуд\s*Мастер/i, /FoodMaster/i, /(?:Йогурт|Кефир|Ряженка|Живой|Вишня|Абрикос|Злаки)\s+ФМ|ФМ\s+(?:Вишня|Абрикос|Злаки|Клубника|Лесные)/],
+    parser: 'z2',
+    z2: { code: 'digits', nameDir: 'up', nameStrip: true },
   },
 ];
 

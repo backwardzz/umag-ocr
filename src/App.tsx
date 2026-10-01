@@ -15,6 +15,7 @@ import { DocView } from './app/DocView';
 import { SettingsDrawer } from './app/SettingsDrawer';
 import { HelpModal } from './app/HelpModal';
 import { IconBook, IconHelp, IconSettings } from './app/Icons';
+import { FormatsList, FORMATS_COUNT } from './app/FormatsList';
 
 let seq = 0;
 const newId = () => `d${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -225,11 +226,11 @@ export default function App() {
             <li><b>Проверьте</b> строки, отмеченные жёлтым или красным</li>
             <li><b>Скачайте Excel</b> и загрузите его в UMAG: «Приёмка» → «Импорт товаров»</li>
           </ol>
-          <p className="muted small">
-            Сейчас узнаёт: GRAND Кондитер, Мегаполис-Казахстан, Сэт Кола, Прима Дистрибьюшн, MAYAN, ИП Искандыров,
-            Карлсберг Пепси, Евразиан Фудс, БЕС БАТЫР, Yupiter Aqtobe, НұралыТрансКом и другие накладные по форме З-2.
-            Многостраничную накладную загрузите всеми фото — страницы склеятся сами.
-          </p>
+          <details className="formats-box">
+            <summary>Какие накладные принимает система · {FORMATS_COUNT} поставщиков</summary>
+            <FormatsList />
+            <p className="muted small">Многостраничную накладную загрузите всеми фото — страницы склеятся сами.</p>
+          </details>
         </main>
       ) : (
         <div className="layout">
