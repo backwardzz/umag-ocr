@@ -86,27 +86,50 @@ function grayToPng(g: Gray): Promise<Blob> {
   return canvas.convertToBlob({ type: 'image/png' });
 }
 
+/** Распознавание отменено пользователем (фото убрали из списка) */
+export const isAbort = (err: unknown) => err instanceof DOMException && err.name === 'AbortError';
+const abortError = () => new DOMException('Распознавание отменено', 'AbortError');
+
+/**
+ * Остановить идущее распознавание можно только вместе с воркерами: Tesseract не прерывает начатую страницу.
+ * Следующее фото запустит их заново (модели уже в кэше браузера, это пара секунд).
+ */
+function stopWorkers() {
+  const t = tessPromise;
+  tessPromise = null;
+  t?.then((w) => w.terminate()).catch(() => undefined);
+  ppWorker?.terminate();
+  ppWorker = null;
+}
+
 /** Очередь: Tesseract-воркер один, поэтому распознаём строго по одному фото */
 let chain: Promise<unknown> = Promise.resolve();
 
-export function recognizeInvoice(file: Blob, onProgress: Progress): Promise<RecognizeResult> {
-  const run = async (): Promise<RecognizeResult> => {
+/** signal — отмена: фото в очереди просто пропускается, идущее распознавание останавливается сразу */
+export function recognizeInvoice(file: Blob, onProgress: Progress, signal?: AbortSignal): Promise<RecognizeResult> {
+  // отменённая работа не должна продолжаться на воркерах следующего фото
+  const check = () => { if (signal?.aborted) throw abortError(); };
+  const work = async (): Promise<RecognizeResult> => {
     try {
       onProgress('Подготовка изображения', 0.02);
       const tessReady = getTesseract();
       const img = await loadImageData(file);
+      check();
       onProgress('Выравнивание и очистка фото', 0.05);
       const pre = await preprocessInWorker(img);
+      check();
       const image: Gray = { w: pre.width, h: pre.height, d: new Uint8ClampedArray(pre.width * pre.height) };
       for (let i = 0; i < image.d.length; i++) image.d[i] = pre.rgba[i * 4];
       const processedPng = await grayToPng(image);
       onProgress('Загрузка OCR-движка', 0.15);
       const tess = await tessReady;
+      check();
 
       // Первый проход (вся страница) — до 70% прогресса, второй (столбцы) — остальное
       let pass = 0;
-      onTessProgress = (p) => onProgress(pass === 0 ? 'Распознавание текста' : 'Уточнение чисел по столбцам', pass === 0 ? 0.2 + p * 0.5 : 0.7);
+      onTessProgress = (p) => !signal?.aborted && onProgress(pass === 0 ? 'Распознавание текста' : 'Уточнение чисел по столбцам', pass === 0 ? 0.2 + p * 0.5 : 0.7);
       const recognize: Recognizer = async (g, opts) => {
+        check();
         await tess.setParameters({ tessedit_char_whitelist: opts.whitelist ?? '' });
         const png = g === image ? processedPng : await grayToPng(g);
         const { data } = await tess.recognize(png, {}, { text: true, blocks: true });
@@ -114,7 +137,7 @@ export function recognizeInvoice(file: Blob, onProgress: Progress): Promise<Reco
         return toOcrPage(data, g.w, g.h).lines;
       };
       const { page, doc } = await recognizePage(image, { rules: pre.rules, charHeight: pre.charHeight }, recognize,
-        (stage, f) => onProgress(stage, 0.7 + f * 0.28));
+        (stage, f) => { if (!signal?.aborted) onProgress(stage, 0.7 + f * 0.28); });
       if (import.meta.env.DEV) {
         const g = globalThis as Record<string, unknown>;
         g.__ocrPages = [...((g.__ocrPages as OcrPage[] | undefined) ?? []), page];
@@ -122,8 +145,18 @@ export function recognizeInvoice(file: Blob, onProgress: Progress): Promise<Reco
       onProgress('Готово', 1);
       return { page, doc, processedUrl: URL.createObjectURL(processedPng) };
     } finally {
-      onTessProgress = null;
+      if (!signal?.aborted) onTessProgress = null;
     }
+  };
+  const run = (): Promise<RecognizeResult> => {
+    if (signal?.aborted) return Promise.reject(abortError());
+    if (!signal) return work();
+    return new Promise<RecognizeResult>((resolve, reject) => {
+      const onAbort = () => { onTessProgress = null; stopWorkers(); reject(abortError()); };
+      signal.addEventListener('abort', onAbort, { once: true });
+      // после отмены work() может не завершиться никогда (воркер остановлен) — очередь его не ждёт
+      work().then(resolve, (e) => reject(signal.aborted ? abortError() : e)).finally(() => signal.removeEventListener('abort', onAbort));
+    });
   };
   const p = chain.then(run, run);
   chain = p.catch(() => undefined);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { recognizeInvoice } from './ocr/engine';
+import { recognizeInvoice, isAbort } from './ocr/engine';
 import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from './core/mapping';
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
@@ -29,6 +29,8 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [toastText, setToastText] = useState<string>();
   const files = useRef(new Map<string, File>());
+  /** Отмена распознавания по id фото (в очереди или в работе) */
+  const aborts = useRef(new Map<string, AbortController>());
   const mappingRef = useRef(mapping);
   mappingRef.current = mapping;
   const docsRef = useRef(docs);
@@ -59,14 +61,17 @@ export default function App() {
     const file = files.current.get(id);
     if (!file) return;
     update(id, { status: 'queued', progress: 0, error: undefined });
+    const ctl = new AbortController();
+    aborts.current.set(id, ctl);
     let last = -1;
     recognizeInvoice(file, (stage, p) => {
       const pct = Math.round(p * 100);
       if (pct === last) return;
       last = pct;
       update(id, { status: 'processing', stage, progress: p });
-    })
+    }, ctl.signal)
       .then((res) => {
+        if (ctl.signal.aborted) return;
         // Сначала справочник (штрихкоды, подтверждённые пользователем), затем автозаполнение из каталога,
         // затем названия из каталога по найденным штрихкодам; в конце — пересчёт единиц (1 блок = 10 шт)
         const doc = applyUnitRules(enrichDoc(res.doc, mappingRef.current, catalogRef.current), settingsRef.current.unitRules);
@@ -89,7 +94,9 @@ export default function App() {
         if (rel?.kind === 'duplicate') toast(`«${self?.fileName ?? 'Фото'}» — повтор уже загруженной накладной`);
         update(id, { status: 'done', progress: 1, doc: flagged, processedUrl: res.processedUrl });
       })
-      .catch((err: unknown) => update(id, { status: 'error', error: err instanceof Error ? err.message : String(err) }));
+      // отменённое фото уже убрано из списка
+      .catch((err: unknown) => { if (!isAbort(err)) update(id, { status: 'error', error: err instanceof Error ? err.message : String(err) }); })
+      .finally(() => { if (aborts.current.get(id) === ctl) aborts.current.delete(id); });
   }, [update]);
 
   const addFiles = useCallback((list: File[]) => {
@@ -175,7 +182,10 @@ export default function App() {
     toast(n ? `Пересчитано строк: ${n}` : 'В открытых накладных нет строк для пересчёта');
   };
 
+  /** Убрать фото; если оно ещё распознаётся или ждёт очереди — распознавание отменяется */
   const onDelete = (id: string) => {
+    aborts.current.get(id)?.abort();
+    aborts.current.delete(id);
     setDocs((prev) => {
       const next = prev.filter((d) => d.id !== id);
       if (selected === id) setSelected(next[0]?.id);
@@ -225,7 +235,7 @@ export default function App() {
         <div className="layout">
           <aside className="sidebar">
             <UploadZone onFiles={addFiles} compact />
-            <DocList docs={docs} selected={selected} catalog={catalog} onSelect={setSelected} />
+            <DocList docs={docs} selected={selected} catalog={catalog} onSelect={setSelected} onCancel={onDelete} />
           </aside>
           <main className="main">
             {current ? (

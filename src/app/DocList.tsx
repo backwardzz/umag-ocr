@@ -1,15 +1,17 @@
 import type { CatalogIndex } from '../core/catalog';
 import { summarize, money, type DocEntry } from './model';
-import { IconAlert, IconCheck } from './Icons';
+import { IconAlert, IconCheck, IconX } from './Icons';
 
 interface Props {
   docs: DocEntry[];
   selected?: string;
   catalog?: CatalogIndex;
   onSelect: (id: string) => void;
+  /** Отменить распознавание и убрать фото (пока оно в очереди или в работе) */
+  onCancel: (id: string) => void;
 }
 
-export function DocList({ docs, selected, catalog, onSelect }: Props) {
+export function DocList({ docs, selected, catalog, onSelect, onCancel }: Props) {
   return (
     <ul className="doclist">
       {docs.map((d) => {
@@ -17,9 +19,10 @@ export function DocList({ docs, selected, catalog, onSelect }: Props) {
         const dup = !!d.doc?.issues.some((x) => x.kind === 'duplicate');
         const ok = s && !dup && s.errors === 0 && s.totalsOk !== false && s.missingBarcode === 0;
         const why = !s ? '' : dup ? 'Повтор уже загруженной накладной' : ok ? 'Готово к выгрузке' : s.errors ? `${s.errors} строк с ошибками` : s.missingBarcode ? `${s.missingBarcode} без штрихкода` : 'Не сходится с итогом';
+        const busy = d.status === 'queued' || d.status === 'processing';
         return (
-          <li key={d.id}>
-            <button type="button" className={`doccard ${selected === d.id ? 'doccard--active' : ''}`} onClick={() => onSelect(d.id)}>
+          <li key={d.id} className="doclist__item">
+            <button type="button" className={`doccard ${selected === d.id ? 'doccard--active' : ''} ${busy ? 'doccard--busy' : ''}`} onClick={() => onSelect(d.id)}>
               <img className="doccard__thumb" src={d.fileUrl} alt="" />
               <span className="doccard__body">
                 <span className="doccard__title">{d.doc?.supplier ?? (d.status === 'done' ? 'Поставщик не определён' : d.fileName)}</span>
@@ -43,6 +46,12 @@ export function DocList({ docs, selected, catalog, onSelect }: Props) {
                 </span>
               )}
             </button>
+            {busy && (
+              <button type="button" className="doccard__cancel" onClick={() => onCancel(d.id)}
+                title="Отменить распознавание и убрать фото" aria-label={`Отменить распознавание: ${d.fileName}`}>
+                <IconX />
+              </button>
+            )}
           </li>
         );
       })}

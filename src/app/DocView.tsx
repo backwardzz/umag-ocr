@@ -7,7 +7,7 @@ import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
 import { downloadBlob, copyText } from './storage';
-import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh } from './Icons';
+import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh, IconX } from './Icons';
 
 const plural = (n: number, one: string, few: string, many: string) =>
   n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
@@ -103,7 +103,9 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           </div>
           <div className="actions">
             {entry.status === 'error' && <button type="button" className="btn" onClick={onRetry}><IconRefresh /> Повторить</button>}
-            <button type="button" className="btn btn--ghost" onClick={onDelete}><IconTrash /> Убрать</button>
+            <button type="button" className="btn btn--ghost" onClick={onDelete}>
+              {entry.status === 'error' ? <><IconTrash /> Убрать</> : <><IconX /> Отменить</>}
+            </button>
           </div>
         </div>
         <div className="docview__body docview__body--single">{photo}</div>
