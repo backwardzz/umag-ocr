@@ -85,7 +85,8 @@ export const SUPPLIERS: SupplierDef[] = [
     id: 'mayan',
     name: 'ТОО "MAYAN"',
     bins: ['210540001009'],
-    keywords: [/MAYAN/i],
+    // OCR читает «MAYAN» и как «МАУАМ» (кириллицей)
+    keywords: [/MAYAN/i, /[MМ][AА][YУ][AА][NНMМ]/i],
     parser: 'z2',
     z2: { code: 'none', nameDir: 'nearest' },
   },
@@ -184,6 +185,34 @@ export const SUPPLIERS: SupplierDef[] = [
     keywords: [/Поставщик.*Q[a-zа-я]{2}aq/i],
     parser: 'z2',
     z2: { code: 'ean', nameDir: 'nearest', nameSide: 'right' },
+  },
+  {
+    // Расходная накладная (1С): №, Штрихкод, Товар (справа, в 2 строки), Количество и «шт», Цена, Сумма; числа у верхнего края строки
+    id: 'ice-plus',
+    name: 'ТОО "Айс-плюс"',
+    bins: [],
+    keywords: [/Айс[-\s]*плюс/i, /Нагыз|Нағыз/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top' },
+  },
+  {
+    // Алкоголь: Товар, Общее количество «3 бут», Коробок, Штук, Цена, Сумма; штрихкодов в накладной нет
+    id: 'global-wine',
+    name: 'ТОО "Global Wine Aktobe"',
+    bins: [],
+    keywords: [/Global\s*Wine/i, /Glob[a-z]{1,3}\s*W[il1]ne/i],
+    parser: 'z2',
+    z2: { code: 'none', nameDir: 'nearest' },
+  },
+  {
+    // Zigi-Zagi: «Накладная на отпуск запасов», в «Номенклатурном номере» штрихкод EAN-13,
+    // последняя цифра перенесена во вторую строку ячейки
+    id: 'amad-trade',
+    name: 'ТОО "AMAD TRADE"',
+    bins: ['250640022082'],
+    keywords: [/AMAD\s*TRADE/i, /Zig[il]-?Zag/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'down', rowAlign: 'top', codeWrap: true },
   },
 ];
 

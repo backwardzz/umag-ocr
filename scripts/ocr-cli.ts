@@ -19,13 +19,63 @@ const files = args.filter((a) => !a.startsWith('--') && !/^\d+$/.test(a));
 const psmIdx = args.indexOf('--psm');
 const psm = psmIdx >= 0 ? args[psmIdx + 1] : '6';
 
+/** Ориентация из EXIF (1 — как есть, 6 — повернуть на 90° по часовой, и т. д.); браузер применяет её сам, jpeg-js — нет */
+function exifOrientation(b: Buffer): number {
+  let o = 2;
+  while (o + 4 < b.length && b[o] === 0xff) {
+    const marker = b[o + 1];
+    const len = b.readUInt16BE(o + 2);
+    if (marker === 0xe1 && b.toString('latin1', o + 4, o + 8) === 'Exif') {
+      const t = o + 10;
+      const le = b.toString('latin1', t, t + 2) === 'II';
+      const r16 = (p: number) => (le ? b.readUInt16LE(p) : b.readUInt16BE(p));
+      const r32 = (p: number) => (le ? b.readUInt32LE(p) : b.readUInt32BE(p));
+      const ifd = t + r32(t + 4);
+      for (let i = 0, n = r16(ifd); i < n; i++) if (r16(ifd + 2 + i * 12) === 0x0112) return r16(ifd + 2 + i * 12 + 8);
+      return 1;
+    }
+    if (marker >= 0xc0 && marker <= 0xc2) break; // дальше только изображение
+    o += 2 + len;
+  }
+  return 1;
+}
+
+/** Поворот/отражение пикселей по значению EXIF Orientation (1–8) */
+function orient(img: { data: Uint8Array; width: number; height: number }, ori: number) {
+  if (ori === 1) return img;
+  const { data, width: w, height: h } = img;
+  const swap = ori >= 5;
+  const nw = swap ? h : w;
+  const nh = swap ? w : h;
+  const out = new Uint8Array(nw * nh * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let nx: number, ny: number;
+      switch (ori) {
+        case 2: nx = w - 1 - x; ny = y; break;
+        case 3: nx = w - 1 - x; ny = h - 1 - y; break;
+        case 4: nx = x; ny = h - 1 - y; break;
+        case 5: nx = y; ny = x; break;
+        case 6: nx = h - 1 - y; ny = x; break;
+        case 7: nx = h - 1 - y; ny = w - 1 - x; break;
+        default: nx = y; ny = w - 1 - x; break; // 8
+      }
+      const s = (y * w + x) * 4;
+      const d = (ny * nw + nx) * 4;
+      out[d] = data[s]; out[d + 1] = data[s + 1]; out[d + 2] = data[s + 2]; out[d + 3] = data[s + 3];
+    }
+  }
+  return { data: out, width: nw, height: nh };
+}
+
 function decode(file: string) {
   const buf = fs.readFileSync(file);
   if (/\.png$/i.test(file)) {
     const png = PNG.sync.read(buf);
     return { data: png.data, width: png.width, height: png.height };
   }
-  return jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 1024 });
+  const img = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 1024 });
+  return orient(img, exifOrientation(buf));
 }
 
 const toPng = (g: Gray) => {

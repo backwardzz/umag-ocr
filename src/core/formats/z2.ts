@@ -206,8 +206,8 @@ function findNumericAnchors(page: OcrPage, words: Word[], lineH: number): Anchor
 /** Строка «Итого»: первое слово «Итог…» ниже начала таблицы */
 function findTotalsWord(words: Word[], afterY: number): Word | undefined {
   return words
-    // «ИТОГ» OCR читает и как «УТогГ», «ЙТОГ», «Wroro:» (жирный шрифт)
-    .filter((x) => x.cy > afterY && /^[^A-Za-zА-Яа-я]{0,2}(?:[иИuUуУйЙ][тТt][оoОO][гГr]|[WwШш][rт][oо][rг][oо]?\W*$)/.test(x.text))
+    // «ИТОГ» OCR читает и как «Итаго», «УТогГ», «ЙТОГ», «Wroro:» (жирный шрифт)
+    .filter((x) => x.cy > afterY && /^[^A-Za-zА-Яа-я]{0,2}(?:[иИuUуУйЙ][тТt][оoОOаАa][гГr]|[WwШш][rт][oо][rг][oо]?\W*$)/.test(x.text))
     .sort((a, b) => a.cy - b.cy)[0];
 }
 
@@ -263,8 +263,11 @@ function nameBand(anchors: Anchor[], i: number, opts: Z2Options, lineH: number, 
 function cellsByColumn(cells: Cell[], cols: ColPos[], colTol: number): (Cell | undefined)[] {
   return cols.map((c) => {
     const d = (x: Cell) => Math.abs(x.x1 - colAt(c, x.cy));
-    const inCol = cells.filter((x) => x.num && d(x) <= colTol);
+    let inCol = cells.filter((x) => x.num && d(x) <= colTol);
     if (!inCol.length) return undefined;
+    // Обрывок линии таблицы («[1» у правого края) не должен вытеснять настоящее число столбца
+    const digits = (x: Cell) => (x.num?.num.match(/\d/g) ?? []).length;
+    if (inCol.some((x) => digits(x) >= 3)) inCol = inCol.filter((x) => digits(x) >= 2);
     return inCol.reduce((p, q) => (d(q) < d(p) ? q : p));
   });
 }
@@ -339,7 +342,8 @@ function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
   if (vatCol >= 0 && vatVotes >= Math.max(1, good.length * 0.3)) roles[vatCol] = 'vat';
   // «Подлежит отпуску»: столбец рядом с количеством с теми же значениями
   let planCol = -1, planVotes = 0;
-  for (let c = 0; c < pi; c++) {
+  // (только соседний слева: столбец номеров строк «1, 2, 3…» совпадает с количеством в паре строк)
+  for (let c = Math.max(0, qi - 1); c < pi; c++) {
     if (c === qi) continue;
     const n = good.filter((row) => row[c].some((v) => row[qi].some((q) => near(v, q, 0.0001)))).length;
     if (n > planVotes || (n === planVotes && planCol >= 0 && Math.abs(c - qi) < Math.abs(planCol - qi))) { planVotes = n; planCol = c; }
@@ -761,7 +765,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     const item: ParsedItem = {
       n: i + 1,
       code: anc.code || undefined,
-      name,
+      name: stripTrailingQty(name, sol.qty, opts.code === 'none'),
       unit,
       qty: sol.qty,
       price: sol.price,
@@ -775,7 +779,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     };
     if (opts.code !== 'none' && (anc.code || anc.stripCode)) applyCode(item, anc, opts);
     else if (opts.code !== 'none') item.issues.push(issue('warn', 'Код строки не прочитан — строка найдена по ценам, введите штрихкод по фото'));
-    if (!name) item.issues.push(issue('warn', 'Не прочитано наименование', 'noname'));
+    if (!item.name) item.issues.push(issue('warn', 'Не прочитано наименование', 'noname'));
     doc.items.push(item);
   });
 
@@ -952,6 +956,18 @@ function appendWrappedDigit(anc: Anchor, words: Word[], lineH: number) {
   if (short(anc.stripCode)) anc.stripCode += d;
 }
 
+/**
+ * Количество («6,000», «12.000 шт») иногда прилипает к концу наименования, когда столбец количества
+ * вплотную к названию: убираем его, только если оно совпадает с прочитанным количеством строки.
+ */
+function stripTrailingQty(name: string, qty: number | undefined, noCodes = false): string {
+  // Без столбца кодов единица («Блок») и обрывки соседних ячеек остаются в конце названия
+  if (noCodes) name = name.replace(/\s+(?:блок|бут|шт|уп|кор)(?![А-Яа-яA-Za-z])[^А-Яа-яA-Za-z]*$/i, '').replace(/\s+[ШЦЩ|!]$/, '').trim();
+  if (qty === undefined) return name;
+  const m = name.match(/\s+(\d{1,4}[.,]\d{3})(?:\s+[^\s\d]{1,4})?$/);
+  return m && m.index !== undefined && Number(m[1].replace(',', '.')) === qty ? name.slice(0, m.index).trim() : name;
+}
+
 function cleanName(allWords: Word[], lineH: number, inlineCode = false, rowNo?: number): string {
   // Линии сетки и печати OCR читает как «П О Г ВИ Ш» с низкой уверенностью — такие строки выбрасываем
   const lines = new Map<number, Word[]>();
@@ -984,6 +1000,8 @@ function cleanName(allWords: Word[], lineH: number, inlineCode = false, rowNo?: 
     .trim();
   // Строки заголовка таблицы попадают в первую строку — отрезаем
   name = name.replace(/^.*?(Наименование,?\s*характеристика|по\s+порядку)\s*/i, '').replace(/^\d{1,2}\s+/, '');
+  // № строки, слипшийся с названием: «10Водка» (цифры и сразу кириллица)
+  name = name.replace(/^\d{1,2}(?=[А-ЯЁа-яё]{3})/, '');
   if (inlineCode) {
     // «… 95г / ШК: 4606779450709 645002 (A)»: номенклатурный номер и подпись штрихкода
     name = name
