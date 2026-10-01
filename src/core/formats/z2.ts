@@ -57,7 +57,8 @@ interface NumCell { num: string; unit?: string }
 
 /** Ячейка с числом (возможно, с единицей после: «12 бут», «1 кор.»); иначе undefined */
 export function parseNumCell(raw: string): NumCell | undefined {
-  let t = raw.replace(JUNK_RE, ' ').replace(/(^|\s)-+|-+(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
+  // «‚5 бут» — нижняя кавычка перед числом (в середине «4‚5» — это запятая, её не трогаем)
+  let t = raw.replace(JUNK_RE, ' ').replace(/(^|\s)-+|-+(?=\s|$)/g, ' ').replace(/^[‚\s]+/, '').replace(/\s+/g, ' ').trim();
   let unit: string | undefined;
   const um = t.match(TRAILING_UNIT_RE);
   if (um && um.index !== undefined && /\d/.test(t.slice(0, um.index))) {
@@ -686,7 +687,9 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     const inUnitCol = (w: Word) => !!a.unitCol && w.cx > a.unitCol.x0 - lineH * 0.4 && w.cx < a.unitCol.x1 + lineH * 0.4;
     const unitCells = makeCells(words.filter((w) => w.cy > numBands[i].top && w.cy <= numBands[i].bottom && (w.x1 < numsLeftEdge || inUnitCol(w))), cellGap)
       .filter((c) => UNIT_CELL_RE.test(c.text.replace(JUNK_RE, '').trim()) && (opts.code === 'none' || opts.nameSide === 'right' || c.x0 > anc.x1));
-    const unitCell = unitCells.sort((x, y) => y.x1 - x.x1)[0];
+    // ближайшая к столбцу количества (у Yupiter правее есть «Штук»: «1 шт.», а единица строки — «бут» в «Общее»)
+    const qtyX = cols[colOf('qtyPlan')]?.center ?? cols[colOf('qty')]?.center;
+    const unitCell = unitCells.sort((x, y) => (qtyX === undefined ? y.x1 - x.x1 : Math.abs(x.x0 - qtyX) - Math.abs(y.x0 - qtyX)))[0];
     const qtyCell = colOf('qty') >= 0 ? rowCols[i][colOf('qty')] : undefined;
     const planCell = colOf('qtyPlan') >= 0 ? rowCols[i][colOf('qtyPlan')] : undefined;
     // Порядок: единица в самой ячейке количества («5 бут» — сначала «Общее», а не «Штук»: «5 шт.»),
@@ -1003,7 +1006,7 @@ export function normalizeUnit(t?: string): string | undefined {
 }
 
 /** Латинские буквы, похожие на кириллические (OCR путает «АВ» и «AB») */
-const toCyrillic = (s: string) => s.replace(/[ABCEHKMOPTX]/g, (c) => 'АВСЕНКМОРТХ'['ABCEHKMOPTX'.indexOf(c)]);
+const toCyrillic = (s: string) => s.replace(/[ABCEHKMOPTXY]/g, (c) => 'АВСЕНКМОРТХУ'['ABCEHKMOPTXY'.indexOf(c)]);
 
 const MONTHS = ['январ', 'феврал', 'март', 'апрел', 'ма[яй]', 'июн', 'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр'];
 
@@ -1059,14 +1062,15 @@ export function findNumberAndDate(page: OcrPage): { number?: string; date?: stri
     if (d && !date && !/составлен/i.test(t)) date = findDate(fixDigits(d[1]))?.date;
   }
   if (number || date) return { number, date };
-  // Заголовок «Накладная … № 94688 от 29 сентября 2026 г.»
+  // Заголовок «Накладная … № 94688 от 29 сентября 2026 г.», «Реализация товаров № УТ-532 от …»
   for (const t of lines) {
-    if (!/накладн|документ/i.test(t)) continue;
+    if (!/накладн|документ|реализаци/i.test(t)) continue;
     const d = findDate(t) ?? findDate(fixDigits(t));
     if (!d) continue;
-    const no = t.match(/№\s*([A-ZА-Яa-z]{0,3}\s?\d[\d-]{2,})/);
+    // «№» OCR читает и как «Ne»; буквы номера латиницей («YT-532») — кириллицей, как в накладной
+    const no = t.match(/(?:№|\bN[eo°])\s*([A-ZА-Яa-z]{0,3}-?\s?\d[\d-]{2,})/);
     const before = fixDigits(t.slice(0, d.index)).match(/\d[\d-]{2,}/g);
-    return { date: d.date, number: no ? no[1].replace(/\s/g, '') : before?.[before.length - 1] };
+    return { date: d.date, number: no ? toCyrillic(no[1].replace(/\s/g, '')) : before?.[before.length - 1] };
   }
   const top = page.lines.filter((l) => l.y1 < page.height * 0.45);
   for (const l of top) {

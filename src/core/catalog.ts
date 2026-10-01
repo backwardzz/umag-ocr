@@ -110,6 +110,8 @@ export function normalizeName(s: string): string {
     .replace(/[а-яёәғқңөұүһі]/g, (c) => TRANSLIT[c] ?? c)
     .replace(/(\d)[.,](\d)/g, '$1$2')
     .replace(/[^a-z0-9]+/g, ' ')
+    // сигареты: «Superslims» и «SS» в накладной = «Super Slims» в UMAG (и наоборот)
+    .replace(/\bsuperslims\b|\bss\b/g, 'super slims')
     .trim();
 }
 
