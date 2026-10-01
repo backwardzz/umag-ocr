@@ -5,6 +5,7 @@ import { buildRows, exportFileName, mergedLineCount, toTsv, toXlsxBlob, toReport
 import { summarize, money, type BulkOp, type DocEntry } from './model';
 import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
+import { PhotoViewer } from './PhotoViewer';
 import { downloadBlob, copyText } from './storage';
 import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh } from './Icons';
 
@@ -30,7 +31,6 @@ interface Props {
 
 export function DocView({ entry, settings, catalog, onDocChange, onItemChange, onItemRemove, onItemAdd, onBulk, onItemsReplace, onDelete, onRetry, toast }: Props) {
   const [view, setView] = useState<'photo' | 'ocr'>('photo');
-  const [zoom, setZoom] = useState(1);
   // На узких экранах фото над таблицей; его можно свернуть
   const [photoOpen, setPhotoOpen] = useState(() => window.innerWidth >= 1400);
   const [pageIdx, setPageIdx] = useState(0);
@@ -81,15 +81,12 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
             ))}
           </div>
         )}
-        {open && <div className="seg">
-          <button type="button" onClick={() => setZoom((z) => Math.max(1, z / 1.5))} aria-label="Уменьшить">−</button>
-          <button type="button" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
-          <button type="button" onClick={() => setZoom((z) => Math.min(6, z * 1.5))} aria-label="Увеличить">+</button>
-        </div>}
       </div>
-      <div className="photo__view">
-        <img src={view === 'ocr' && page.processedUrl ? page.processedUrl : page.fileUrl} alt="Фото накладной" style={{ width: `${zoom * 100}%` }} />
-      </div>
+      {open && (
+        <div className="photo__view">
+          <PhotoViewer src={view === 'ocr' && page.processedUrl ? page.processedUrl : page.fileUrl} alt="Фото накладной" />
+        </div>
+      )}
     </section>
   );
 
