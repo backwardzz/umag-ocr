@@ -84,6 +84,10 @@ export function readValues(text: string | undefined, role: Role): number[] {
   if (role !== 'qty' && role !== 'qtyPlan') {
     const m = t.replace(/[.,]+$/, '').match(/^(\d{1,3}(?: \d{3})*|\d{4,6}) (\d{2})$/);
     if (m) return [Number(`${m[1].replace(/ /g, '')}.${m[2]}`)];
+    // «11 618,001» — к копейкам суммы с разделителем тысяч прилип мусор (скобка, линия таблицы):
+    // без этого число распадается на «11» и «618,001»
+    const g = t.match(/^(\d{1,3}(?: \d{3})+)[.,](\d{2})\d$/);
+    if (g) return [Number(`${g[1].replace(/ /g, '')}.${g[2]}`)];
   }
   const toks = extractNumbers(t);
   if (!toks.length) return [];
@@ -963,6 +967,8 @@ function appendWrappedDigit(anc: Anchor, words: Word[], lineH: number) {
 function stripTrailingQty(name: string, qty: number | undefined, noCodes = false): string {
   // Без столбца кодов единица («Блок») и обрывки соседних ячеек остаются в конце названия
   if (noCodes) name = name.replace(/\s+(?:блок|бут|шт|уп|кор)(?![А-Яа-яA-Za-z])[^А-Яа-яA-Za-z]*$/i, '').replace(/\s+[ШЦЩ|!]$/, '').trim();
+  // «Сигареты Rothmans Demi Silver 2» — количество из соседнего столбца (только если равно количеству строки)
+  if (noCodes && qty !== undefined) name = name.replace(/\s+(\d{1,3})$/, (all, d) => (Number(d) === qty ? '' : all)).replace(/^[A-Za-z]\s+(?=[А-ЯЁ])/, '');
   if (qty === undefined) return name;
   const m = name.match(/\s+(\d{1,4}[.,]\d{3})(?:\s+[^\s\d]{1,4})?$/);
   return m && m.index !== undefined && Number(m[1].replace(',', '.')) === qty ? name.slice(0, m.index).trim() : name;
