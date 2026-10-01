@@ -82,7 +82,7 @@ export function readValues(text: string | undefined, role: Role): number[] {
   if (/^\d{1,3}(?: \d{3})+$/.test(t)) return [Number(t.replace(/ /g, ''))];
   // «4 936 00», «1936 00» — OCR потерял запятую перед копейками, осталась только пробелом
   if (role !== 'qty' && role !== 'qtyPlan') {
-    const m = t.match(/^(\d{1,3}(?: \d{3})*|\d{4,6}) (\d{2})$/);
+    const m = t.replace(/[.,]+$/, '').match(/^(\d{1,3}(?: \d{3})*|\d{4,6}) (\d{2})$/);
     if (m) return [Number(`${m[1].replace(/ /g, '')}.${m[2]}`)];
   }
   const toks = extractNumbers(t);
@@ -152,6 +152,16 @@ function findCodeAnchors(words: Word[], opts: Z2Options, lineH: number): Anchor[
   for (const w of words) {
     const code = cleanCode(w.text);
     if (code && codeFits(code, opts)) cands.push({ word: w, code, cy: w.cy, x0: w.x0, x1: w.x1 });
+  }
+  if (opts.nameSide === 'inline') {
+    // штрихкод в тексте OCR иногда режет на два слова: «460562701 1819» — склеиваем, если выходит верный EAN-13
+    for (let i = 0; i + 1 < words.length; i++) {
+      const a = words[i], b = words[i + 1];
+      const ca = cleanCode(a.text), cb = cleanCode(b.text);
+      if (!ca || !cb || a.line !== b.line || b.x0 - a.x1 > lineH * 1.5) continue;
+      const code = ca + cb;
+      if (code.length === 13 && isValidEan(code)) cands.push({ word: a, code, cy: (a.cy + b.cy) / 2, x0: a.x0, x1: b.x1 });
+    }
   }
   if (!cands.length) return [];
   if (opts.nameSide === 'inline') {
@@ -275,7 +285,7 @@ function fitColumn(cells: Cell[], lineH: number): ColPos['fit'] {
     const my = cs.reduce((acc, c) => acc + c.cy, 0) / cs.length, mx = cs.reduce((acc, c) => acc + c.x1, 0) / cs.length;
     let vy = 0, cov = 0;
     for (const c of cs) { vy += (c.cy - my) ** 2; cov += (c.cy - my) * (c.x1 - mx); }
-    return { x: mx, y: my, slope: vy ? Math.max(-0.06, Math.min(0.06, cov / vy)) : 0 };
+    return { x: mx, y: my, slope: vy ? Math.max(-0.1, Math.min(0.1, cov / vy)) : 0 };
   };
   if (cells.length < 6) return undefined;
   const span = Math.max(...cells.map((c) => c.cy)) - Math.min(...cells.map((c) => c.cy));
@@ -362,6 +372,7 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     });
     anchors = dedupeByY([...anchors, ...extra], lineH);
   }
+  if (opts.code !== 'none') anchors = fillMissingRows(page, anchors, lineH);
   const empty = {
     words, lineH, anchors, cols: [] as ColX[], roles: [] as ColRole[], numBands: [] as Band[], bandCells: [] as Cell[][],
     pitch: lineH, totalsWords: undefined as Word[] | undefined, numbersLeft: 0, codeCol: { x0: 0, x1: 0 }, cellGap,
@@ -428,11 +439,14 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
       const fit = fitColumn(numericCells.filter((x) => x.x1 >= c.members[0] && x.x1 <= c.members[c.members.length - 1] && x.x1 - x.x0 < lineH * 6), lineH);
       return { center: c.center, x0, x1: Math.max(c.center, ...members.map((m) => m.x1)), fit };
     });
-    // Снос от съёмки под углом одинаков у всех столбцов: наклон принимаем, только если он найден
-    // хотя бы у двух столбцов и согласован (иначе это выбросы — например, цифра из шапки)
+    // Снос от съёмки под углом согласован у всех столбцов: одинаковый (лист повёрнут) или растёт
+    // от столбца к столбцу («веер» — лист снят наискосок). Наклон принимаем, только если он найден хотя бы
+    // у двух столбцов и согласован (иначе это выбросы — например, цифра из шапки)
     const slopes = cols.map((c) => c.fit?.slope).filter((x): x is number => x !== undefined);
-    const agree = slopes.length >= 2 && (slopes.every((x) => x > 0) || slopes.every((x) => x < 0))
-      && Math.max(...slopes.map(Math.abs)) <= Math.min(...slopes.map(Math.abs)) * 2.5;
+    const abs = slopes.map(Math.abs);
+    const monotonic = abs.every((x, i) => i === 0 || x >= abs[i - 1] - 0.003) || abs.every((x, i) => i === 0 || x <= abs[i - 1] + 0.003);
+    const agree = slopes.length >= Math.max(2, cols.length * 0.6) && (slopes.every((x) => x > 0) || slopes.every((x) => x < 0))
+      && (Math.max(...abs) <= Math.min(...abs) * 2.5 || (monotonic && Math.max(...abs) <= Math.min(...abs) * 6));
     if (!agree) for (const c of cols) c.fit = undefined;
 
     // Роли столбцов: по арифметике, иначе — как в стандартной З-2 (5 самых правых)
@@ -759,7 +773,8 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       extraCodes: ntins.length ? ntins : undefined,
       raw: [wordsToText(nameWords, lineH), anc.code, ...cells.map((c) => c.text)].filter(Boolean).join(' | '),
     };
-    if (opts.code !== 'none') applyCode(item, anc, opts);
+    if (opts.code !== 'none' && (anc.code || anc.stripCode)) applyCode(item, anc, opts);
+    else if (opts.code !== 'none') item.issues.push(issue('warn', 'Код строки не прочитан — строка найдена по ценам, введите штрихкод по фото'));
     if (!name) item.issues.push(issue('warn', 'Не прочитано наименование', 'noname'));
     doc.items.push(item);
   });
@@ -806,7 +821,18 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       .map((t) => t.value / 100)).filter((v) => near(v, rowsSum, tol)),
   ];
   if (sumC.length || vatC.length || qtyC.length || looseC.length) {
-    const sum = [...sumC, ...looseC].find((x) => near(x, rowsSum, tol)) ?? sumC.find((x) => x >= 1) ?? sumC[0];
+    // Все числа строки «Итого» (и без запятой: «1442400» = 14 424,00) — кандидаты, если строки не сошлись
+    const lineNums = totalsWords ? totCells.flatMap((c) => extractNumbers(fixDigits(c.text.replace(JUNK_RE, ' '))))
+      .flatMap((t) => (t.hasDecimals ? [t.value] : [t.value, ...(t.text.length >= 5 ? [t.value / 100] : [])])) : [];
+    // НДС итога, прочитанный в своём столбце или где-то в строке «Итого»: 1 989,53 → итог 14 424
+    const vatReads = [...vatC, ...lineNums.filter((v) => !Number.isInteger(v))];
+    const vatOk = (s: number) => vatReads.some((v) => near(v, round2((s * VAT_RATE) / (1 + VAT_RATE)), 0.05));
+    // Итог не может быть сильно меньше суммы строк (382 при строках на 14 404 — мусор OCR)
+    const plausible = (s: number) => s >= 1 && s >= rowsSum * 0.5;
+    const pool = [...sumC, ...looseC, ...lineNums];
+    const sum = [...sumC, ...looseC].find((x) => near(x, rowsSum, tol))
+      ?? pool.find((x) => plausible(x) && vatOk(x))
+      ?? sumC.find(plausible);
     doc.totals = {
       qty: qtyC[0],
       sum,
@@ -876,6 +902,40 @@ function repairByNeighbors(items: ParsedItem[]) {
     it.issues.push(issue('warn', `Штрихкод прочитан как ${it.barcode} — исправлен по контрольной цифре и соседним строкам на ${fixed}, сверьте`));
     it.barcode = fixed;
   });
+}
+
+/** Деньги в строке OCR: «631,00», «3 155.00» */
+const moneyCount = (text: string) => (fixDigits(text).match(/\d[.,]\d{2}(?!\d)/g) ?? []).length;
+
+/**
+ * Строка товара, код которой OCR не прочитал ни в одном проходе. Если у поставщика числа стоят на одной
+ * линии с кодом (так у большинства строк), то линия с ценой и суммой между двумя найденными строками —
+ * пропущенная строка: добавляем её без кода (штрихкод введут вручную), чтобы числа ниже не съехали.
+ */
+function fillMissingRows(page: OcrPage, anchors: Anchor[], lineH: number): Anchor[] {
+  if (anchors.length < 4) return anchors;
+  const lineOf = (a: Anchor) => (a.word ? page.lines[a.word.line] : page.lines.find((l) => Math.abs((l.y0 + l.y1) / 2 - a.cy) < lineH * 0.5));
+  const onLine = anchors.filter((a) => { const l = lineOf(a); return !!l && moneyCount(l.text) >= 2; }).length;
+  if (onLine < anchors.length * 0.7) return anchors;
+  const codeX1 = median(anchors.map((a) => a.x1));
+  const pitch = median(anchors.slice(1).map((x, k) => x.cy - anchors[k].cy));
+  const extra: Anchor[] = [];
+  for (let i = 1; i < anchors.length; i++) {
+    const a = anchors[i - 1], b = anchors[i];
+    // промежуток на строку больше обычного; линия — посередине, а не продолжение соседней строки
+    // (OCR иногда режет одну строку таблицы на две линии)
+    if (b.cy - a.cy < pitch * 1.6) continue;
+    for (const l of page.lines) {
+      const cy = (l.y0 + l.y1) / 2;
+      if (cy < a.cy + pitch * 0.6 || cy > b.cy - pitch * 0.6) continue;
+      // деньги правее кодов, на линии нет найденного кода
+      const right = l.words.filter((w) => w.x0 > codeX1).map((w) => w.text).join(' ');
+      if (moneyCount(right) < 2) continue;
+      if (extra.some((x) => Math.abs(x.cy - cy) < lineH * 0.7)) continue;
+      extra.push({ cy, x0: a.x0, x1: a.x1, code: '' });
+    }
+  }
+  return extra.length ? [...anchors, ...extra].sort((p, q) => p.cy - q.cy) : anchors;
 }
 
 /** Перенесённая последняя цифра штрихкода: одна цифра строкой ниже, под кодом */

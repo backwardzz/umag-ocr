@@ -84,7 +84,9 @@ export function oneDigitOff(a: number, b: number): boolean {
 export function sumMatches(s: number, q: number, p: number, tol = sumTol(q)): boolean {
   const exact = q * p;
   if (near(s, round2(exact), tol)) return true;
-  return !Number.isInteger(q) && Number.isInteger(s) && s === Math.round(exact);
+  if (!Number.isInteger(q) && Number.isInteger(s) && s === Math.round(exact)) return true;
+  // целое q × p с испорченными копейками («2 646,20» вместо «2 646,00»): рубли совпали, копейки — мусор OCR
+  return Number.isInteger(q) && Number.isInteger(round2(exact)) && Math.trunc(s) === round2(exact) && s - Math.trunc(s) < 1;
 }
 
 /** Допуск суммы: цена в накладной округлена до тиын, при большом количестве набегает */
@@ -140,10 +142,14 @@ export function solveRow(r: RowReadings): RowSolution {
         // на малое количество (2, 3) почти всегда, а две суммы с копейками совпадают не случайно
         if (priceReads) score += 1;
       } else if (sumC.some((x) => oneDigitOff(x, s))) score += 1;
+      // сумма прочитана, но вариант ей противоречит — хуже, чем неверная цифра количества:
+      // сумма с копейками совпасть с q × p случайно не может, а «3» и «5» OCR путает часто
+      else if (sumC.some((x) => !priceC.length || priceC.some((pr) => x >= pr * 0.99))) score -= 1.5;
       // Сумма в накладной — это q × p с округлением до тиын. Прочтение, отличающееся на 1 тиын
       // при точно прочитанной цене, — ошибка OCR (910,01 вместо 910,00)
       const exactPrice = priceC.some((x) => near(x, p, 0.001));
-      const sFinal = sRead !== undefined && !(exactPrice && Math.abs(sRead - s) <= 0.011) ? sRead : s;
+      // (и испорченные копейки при целом q × p: «2 646,20» → 2 646,00)
+      const sFinal = sRead !== undefined && !(exactPrice && (Math.abs(sRead - s) <= 0.011 || (Number.isInteger(s) && Math.abs(sRead - s) < 1))) ? sRead : s;
       const rateOk = rates.find((rate) => vatC.some((v) => near(v, vatOf(sFinal, rate, r.vatIncluded), 0.03)));
       if (rateOk !== undefined) { score += rateOk === r.vatRate ? 2 : 1; support++; }
       else if (vatC.some((v) => oneDigitOff(v, vatOf(sFinal, r.vatRate, r.vatIncluded)))) score += 1;

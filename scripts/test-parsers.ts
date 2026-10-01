@@ -79,7 +79,8 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json') && (!o
       /** Известные ограничения по варианту OCR ('browser' / 'node'): печатаются, но не считаются ошибкой */
       knownIssues?: Record<string, string>;
     } = JSON.parse(fs.readFileSync(expFile, 'utf8'));
-    const variant = f.includes('-browser') ? 'browser' : 'node';
+    // вариант OCR — суффикс файла: 1-browser.ocr.json → browser, 1-x15.ocr.json (фото в 1,5 раза крупнее) → x15
+    const variant = f.match(/-([a-z0-9]+)\.ocr\.json$/)?.[1] ?? 'node';
     const known = exp.knownIssues?.[variant];
     if (exp.supplier && !(doc.supplier ?? '').toLowerCase().includes(exp.supplier.toLowerCase())) errs.push(`поставщик ${doc.supplier}, ожидался ${exp.supplier}`);
     // Шапку OCR читает хуже таблицы (69236 вместо 59236), это замечание, а не ошибка разбора

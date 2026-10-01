@@ -15,7 +15,7 @@ const variant = process.argv.includes('--browser') ? '-browser' : '';
 const verbose = process.argv.includes('-v');
 const stats: Record<string, { ok: number; wrong: number }> = {};
 let none = 0, unknownFilled = 0, unknownTotal = 0;
-for (const f of fs.readdirSync('samples').filter((x) => x.endsWith(`${variant}.ocr.json`) && (variant || !x.includes('-browser'))).sort()) {
+for (const f of fs.readdirSync('samples').filter((x) => x.endsWith(`${variant}.ocr.json`) && (variant || !/-[a-z0-9]+\.ocr\.json$/.test(x))).sort()) {
   const doc = parseDocument(JSON.parse(fs.readFileSync(`samples/${f}`, 'utf8')));
   const exp = JSON.parse(fs.readFileSync(`samples/${f.replace(/(-browser)?\.ocr\.json$/, '.expected.json')}`, 'utf8'));
   if (verbose) console.log(`\n== ${f} (${doc.supplier})`);
