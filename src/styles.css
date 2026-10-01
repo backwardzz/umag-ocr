@@ -212,6 +212,38 @@ button, input { font: inherit; color: inherit; }
 .row--error td:first-child { box-shadow: inset 3px 0 0 var(--err); }
 .row--warn td:first-child { box-shadow: inset 3px 0 0 var(--warn-strong); }
 .row--todo td:first-child { box-shadow: inset 3px 0 0 var(--primary); }
+.c-sel { width: 30px; text-align: center; padding-top: 14px !important; }
+.c-sel input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary); }
+.items tr.is-selected td { background: color-mix(in srgb, var(--primary-soft) 70%, transparent); }
+
+/* Массовые правки над таблицей */
+.bulk { padding: 10px 12px 6px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+.bulk__row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bulk__label { font-size: 13px; color: var(--muted); }
+.bulk__scope { margin-left: auto; font-size: 12.5px; }
+.bulk__group { display: inline-flex; gap: 4px; align-items: center; padding: 2px 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.bulk select, .bulk__num, .bulk__unit {
+  height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 0 6px; font: inherit;
+}
+.bulk__num { width: 64px; text-align: right; }
+.bulk__unit { width: 80px; }
+.bulk__hint { margin: 0; font-size: 12px; }
+.bulk kbd { font-family: var(--mono); font-size: 11.5px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
+.chipbtn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px;
+  padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer;
+}
+.chipbtn:hover { border-color: var(--muted); }
+.chipbtn.is-on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+
+/* Правила пересчёта единиц в настройках */
+.rules { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.rules__row { display: flex; gap: 6px; align-items: center; }
+.rules__unit, .rules__num {
+  height: 32px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); padding: 0 8px; font: inherit;
+}
+.rules__unit { width: 90px; }
+.rules__num { width: 70px; text-align: right; }
 
 .cell-input {
   width: 100%; height: 32px; padding: 0 8px; border: 1px solid transparent; border-radius: 6px;

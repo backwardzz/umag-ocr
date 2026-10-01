@@ -16,6 +16,11 @@ export function loadSettings(): ExportSettings {
       columns: columns.length ? columns : DEFAULT_EXPORT.columns,
       header: s.header ?? DEFAULT_EXPORT.header,
       qtyMode: s.qtyMode === 'packs' ? 'packs' : 'pcs',
+      // сохранённые до появления правил настройки получают правило по умолчанию (1 блок = 10 шт)
+      unitRules: Array.isArray(s.unitRules)
+        ? s.unitRules.filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string' && Number(r.factor) > 0)
+          .map((r) => ({ from: r.from, to: r.to, factor: Number(r.factor) }))
+        : DEFAULT_EXPORT.unitRules,
     };
   } catch {
     return DEFAULT_EXPORT;

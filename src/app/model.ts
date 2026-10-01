@@ -2,6 +2,7 @@ import { isValidEan, round2, near } from '../core/numbers';
 import { itemMapCode, mapKey, supplierKey, type MapEntry, type MappingStore } from '../core/mapping';
 import { nameSimilarity, type CatalogIndex } from '../core/catalog';
 import { issue, sourceName, type Issue, type ParsedDoc, type ParsedItem } from '../core/types';
+import type { UnitRule } from '../core/export';
 
 export type DocStatus = 'queued' | 'processing' | 'done' | 'error';
 
@@ -194,9 +195,14 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
  */
 export function applyCatalogNames(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc {
   let changed = false;
-  const items = doc.items.map((it) => {
+  const items = doc.items.map((src) => {
+    const found = src.barcode && catalog?.size ? catalog.get(src.barcode) : undefined;
+    // товар UMAG строки — по нему в файле складываются разные штрихкоды одного товара
+    let it = src.catalogBarcode === found?.barcode ? src : { ...src, catalogBarcode: found?.barcode };
+    // единица не прочитана в накладной — берём единицу товара в UMAG («литр» там пишут полностью)
+    if (!it.unit && found?.unit) it = { ...it, unit: found.unit === 'литр' ? 'л' : found.unit };
+    if (it !== src) changed = true;
     if (it.nameSource === 'manual') return it;
-    const found = it.barcode && catalog?.size ? catalog.get(it.barcode) : undefined;
     if (found?.name.trim()) {
       if (it.nameSource === 'catalog' && it.name === found.name) return it;
       changed = true;
@@ -245,7 +251,9 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
 
 export function allIssues(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
   // замечание разбора о контрольной цифре неактуально, если штрихкод заменён (из каталога, справочника, вручную)
-  const parsed = it.edited ? [] : it.barcodeSource === 'invoice' ? it.issues : it.issues.filter((x) => x.kind !== 'ean');
+  const parsed = (it.edited ? [] : it.barcodeSource === 'invoice' ? it.issues : it.issues.filter((x) => x.kind !== 'ean'))
+    // «не прочитано наименование» неактуально, если название есть (например, из каталога UMAG)
+    .filter((x) => !(x.kind === 'noname' && it.name.trim()));
   return [...itemProblems(it, catalog), ...parsed];
 }
 
@@ -311,6 +319,73 @@ export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedIte
 
 export function newItem(n: number): ParsedItem {
   return { n, name: '', issues: [], edited: true };
+}
+
+/** Единицы для подсказок в полях «Ед. изм» */
+export const UNITS = ['шт', 'кг', 'блок', 'пачка', 'уп', 'бут', 'л', 'кор', 'банка'];
+
+const round3 = (x: number) => Math.round(x * 1000) / 1000;
+const unitKey = (u?: string) => (u ?? '').trim().toLowerCase().replace(/\.$/, '');
+
+/** Запоминаем, как было в накладной, — один раз, до первой правки */
+const withOrig = (it: ParsedItem): ParsedItem => (it.orig ? it : { ...it, orig: { qty: it.qty, unit: it.unit, price: it.price } });
+
+/**
+ * Массовые правки строк. Сумма не меняется никогда — это деньги по накладной;
+ * пересчёт единиц меняет только количество (1 блок → 10 шт), цена остаётся ценой из накладной.
+ */
+export type BulkOp =
+  | { kind: 'scale'; field: 'qty' | 'price'; factor: number }
+  | { kind: 'unit'; unit?: string }
+  /** Пересчёт единиц: количество × factor и новая единица (1 блок = 10 шт) */
+  | { kind: 'convert'; factor: number; unit: string }
+  /** Вернуть количество, единицу и цену как в накладной */
+  | { kind: 'restore' };
+
+export function bulkEditItem(it: ParsedItem, op: BulkOp): ParsedItem {
+  if (op.kind === 'restore') {
+    if (!it.orig) return it;
+    const { orig, ...rest } = it;
+    return fixPack({ ...rest, qty: orig.qty, unit: orig.unit, price: orig.price });
+  }
+  if (op.kind === 'unit') return unitKey(op.unit) === unitKey(it.unit) ? it : { ...withOrig(it), unit: op.unit || undefined };
+  if (!(op.factor > 0) || op.factor === 1) return it;
+  if (op.kind === 'convert') {
+    return fixPack({ ...withOrig(it), qty: it.qty === undefined ? undefined : round3(it.qty * op.factor), unit: op.unit });
+  }
+  const v = it[op.field];
+  if (v === undefined) return it;
+  return fixPack({ ...withOrig(it), [op.field]: op.field === 'qty' ? round3(v * op.factor) : round2(v * op.factor) });
+}
+
+/** Упаковка «N x M» следует за количеством */
+const fixPack = (it: ParsedItem): ParsedItem =>
+  (it.pack && it.qty !== undefined ? { ...it, pack: { ...it.pack, count: round2(it.qty / it.pack.size) } } : it);
+
+export function bulkEdit(items: ParsedItem[], rows: Iterable<number>, op: BulkOp): ParsedItem[] {
+  const set = new Set(rows);
+  return items.map((it, i) => (set.has(i) ? bulkEditItem(it, op) : it));
+}
+
+/** Правило пересчёта для единицы строки (без учёта регистра и точки: «Блок», «блок.») */
+export function ruleFor(unit: string | undefined, rules: UnitRule[]): UnitRule | undefined {
+  const u = unitKey(unit);
+  return u ? rules.find((r) => unitKey(r.from) === u && r.factor > 0 && unitKey(r.to) !== u) : undefined;
+}
+
+/**
+ * Пересчёт единиц при загрузке накладной (сигареты: 1 блок = 10 шт). Строки, уже пересчитанные
+ * или поправленные вручную, не трогаем — правило можно применять повторно.
+ */
+export function applyUnitRules(doc: ParsedDoc, rules: UnitRule[]): ParsedDoc {
+  let changed = false;
+  const items = doc.items.map((it) => {
+    const r = it.orig ? undefined : ruleFor(it.unit, rules);
+    if (!r || it.qty === undefined) return it;
+    changed = true;
+    return bulkEditItem(it, { kind: 'convert', factor: r.factor, unit: r.to });
+  });
+  return changed ? { ...doc, items } : doc;
 }
 
 export const money = (x?: number) =>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
 import { sourceName, type ParsedItem } from '../core/types';
-import { allIssues, worstLevel, money, qtyFmt } from './model';
+import { allIssues, worstLevel, money, qtyFmt, UNITS } from './model';
 import { IconAlert, IconBarcode, IconCheck, IconPlus, IconX } from './Icons';
 
 interface Props {
@@ -10,6 +10,12 @@ interface Props {
   onChange: (index: number, patch: Partial<ParsedItem>) => void;
   onRemove: (index: number) => void;
   onAdd: () => void;
+  /** Выбранные строки для массовых правок */
+  selected: Set<number>;
+  onToggle: (index: number, range: boolean) => void;
+  onToggleAll: (on: boolean) => void;
+  /** «*10» или «/10» в поле количества или цены: пересчёт без изменения суммы */
+  onScale: (index: number, field: 'qty' | 'price', factor: number) => void;
 }
 
 function parseNum(s: string): number | undefined {
@@ -19,12 +25,32 @@ function parseNum(s: string): number | undefined {
   return Number.isFinite(v) ? v : undefined;
 }
 
-/** Числовое поле: принимает и запятую, и точку; сохраняет по уходу из поля */
-function NumInput({ value, onCommit, label, invalid, money }: { value?: number; onCommit: (v?: number) => void; label: string; invalid?: boolean; money?: boolean }) {
+/** «*10», «x10», «×10», «/10», «÷10» — во сколько раз изменить значение */
+function parseScale(s: string): number | undefined {
+  const m = s.trim().match(/^([*xх×/÷:])\s*(\d+(?:[.,]\d+)?)$/i);
+  if (!m) return undefined;
+  const f = Number(m[2].replace(',', '.'));
+  if (!(f > 0)) return undefined;
+  return /[/÷:]/.test(m[1]) ? 1 / f : f;
+}
+
+/**
+ * Числовое поле: принимает и запятую, и точку; сохраняет по уходу из поля.
+ * «*10» или «/10» — умножить или разделить текущее значение (onScale).
+ */
+function NumInput({ value, onCommit, onScale, label, invalid, money }: {
+  value?: number; onCommit: (v?: number) => void; onScale?: (factor: number) => void; label: string; invalid?: boolean; money?: boolean;
+}) {
   const fmt = (v?: number) => (v === undefined ? '' : (money ? v.toFixed(2) : String(v)).replace('.', ','));
   const [text, setText] = useState(fmt(value));
   useEffect(() => setText(fmt(value)), [value]);
   const commit = () => {
+    const f = onScale ? parseScale(text) : undefined;
+    if (f !== undefined) {
+      setText(fmt(value));
+      if (f !== 1) onScale!(f);
+      return;
+    }
     const v = parseNum(text);
     if (v !== value) onCommit(v);
     else setText(fmt(value));
@@ -77,12 +103,13 @@ function focusNextEmptyBarcode(from: number) {
   }
 }
 
-export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props) {
+export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected, onToggle, onToggleAll, onScale }: Props) {
   const rows = useMemo(() => items.map((it, i) => {
     const issues = allIssues(it, catalog);
     const suggestions = !it.barcode && catalog && catalog.size ? catalog.suggest(sourceName(it)) : [];
     // тот же штрихкод выше (бонусная строка) — в файле строки сложатся
-    const first = it.barcode ? items.findIndex((x) => x.barcode === it.barcode) : -1;
+    // и другой штрихкод того же товара UMAG (вкус, заведённый дополнительным штрихкодом)
+    const first = it.barcode ? items.findIndex((x) => x.barcode === it.barcode || (!!it.catalogBarcode && x.catalogBarcode === it.catalogBarcode)) : -1;
     return { it, issues, level: worstLevel(issues), suggestions, sameAs: first >= 0 && first < i ? first : undefined };
   }), [items, catalog]);
 
@@ -91,6 +118,11 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
       <table className="items">
         <thead>
           <tr>
+            <th className="c-sel">
+              <input type="checkbox" aria-label="Выбрать все строки" checked={items.length > 0 && selected.size === items.length}
+                ref={(el) => { if (el) el.indeterminate = selected.size > 0 && selected.size < items.length; }}
+                onChange={(e) => onToggleAll(e.target.checked)} />
+            </th>
             <th className="c-n">№</th>
             <th className="c-bc">Штрихкод</th>
             <th className="c-name">Наименование</th>
@@ -108,7 +140,11 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
             const infos = issues.filter((x) => x.level === 'info');
             const listId = suggestions.length ? `sugg-${i}` : undefined;
             return (
-              <tr key={i} className={`row row--${level}`}>
+              <tr key={i} className={`row row--${level} ${selected.has(i) ? 'is-selected' : ''}`}>
+                <td className="c-sel">
+                  <input type="checkbox" aria-label={`Выбрать строку ${i + 1}`} checked={selected.has(i)} readOnly
+                    onClick={(e) => onToggle(i, e.shiftKey)} />
+                </td>
                 <td className="c-n">{i + 1}</td>
                 <td className="c-bc">
                   <TextInput
@@ -148,7 +184,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                       </>
                     )}
                     {suggestions.length > 0 && <span className="tag tag--hint">есть подсказки: {suggestions.length}</span>}
-                    {sameAs !== undefined && <span className="tag" title="В файле для UMAG строки с одинаковым штрихкодом складываются">сложится со строкой {sameAs + 1}</span>}
+                    {sameAs !== undefined && <span className="tag" title="В файле для UMAG складываются строки с одинаковым штрихкодом и разные штрихкоды одного товара UMAG">сложится со строкой {sameAs + 1}</span>}
                   </div>
                 </td>
                 <td className="c-name">
@@ -168,16 +204,22 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
                   )}
                 </td>
                 <td className="c-num">
-                  <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} />
+                  <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} onScale={(f) => onScale(i, 'qty', f)} />
+                  {it.orig && (it.orig.qty !== it.qty || it.orig.unit !== it.unit) && (
+                    <div className="cell-sub cell-sub--num" title="Так в накладной — количество пересчитано (цена и сумма как в накладной)">
+                      было {qtyFmt(it.orig.qty)} {it.orig.unit ?? ''}
+                    </div>
+                  )}
                   {it.pack && (
                     <div className="cell-sub cell-sub--num">{qtyFmt(it.pack.count)} уп × {it.pack.size}</div>
                   )}
                 </td>
                 <td className="c-unit">
-                  <TextInput value={it.unit ?? ''} label={`Ед. изм, строка ${i + 1}`} onCommit={(v) => onChange(i, { unit: v || undefined })} />
+                  <TextInput value={it.unit ?? ''} label={`Ед. изм, строка ${i + 1}`} list="units-table" onCommit={(v) => onChange(i, { unit: v || undefined })} />
                 </td>
                 <td className="c-num">
-                  <NumInput money value={it.price} label={`Цена, строка ${i + 1}`} invalid={it.price === undefined} onCommit={(v) => onChange(i, { price: v })} />
+                  <NumInput money value={it.price} label={`Цена, строка ${i + 1}`} invalid={it.price === undefined} onCommit={(v) => onChange(i, { price: v })} onScale={(f) => onScale(i, 'price', f)} />
+                  {it.orig && it.orig.price !== it.price && <div className="cell-sub cell-sub--num" title="Цена в накладной">было {money(it.orig.price)}</div>}
                 </td>
                 <td className="c-num c-sum">{money(it.sum)}</td>
                 <td className="c-st">
@@ -196,6 +238,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd }: Props)
           })}
         </tbody>
       </table>
+      <datalist id="units-table">{UNITS.map((u) => <option key={u} value={u} />)}</datalist>
       <button type="button" className="btn btn--ghost add-row" onClick={onAdd}><IconPlus /> Добавить строку</button>
     </div>
   );

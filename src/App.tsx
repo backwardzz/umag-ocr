@@ -4,7 +4,10 @@ import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
 import { issue, sourceName, type ParsedDoc, type ParsedItem } from './core/types';
-import { applyCatalog, applyCatalogNames, applyMapping, docSupplierKey, enrichDoc, findRelated, mergePages, newItem, patchItem, type DocEntry } from './app/model';
+import {
+  applyCatalog, applyCatalogNames, applyMapping, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, mergePages, newItem, patchItem, ruleFor,
+  type BulkOp, type DocEntry,
+} from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
 import { UploadZone } from './app/UploadZone';
 import { DocList } from './app/DocList';
@@ -30,6 +33,8 @@ export default function App() {
   mappingRef.current = mapping;
   const docsRef = useRef(docs);
   docsRef.current = docs;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   const catalog = useMemo(() => (catalogItems.length ? new CatalogIndex(catalogItems) : undefined), [catalogItems]);
   const catalogRef = useRef(catalog);
@@ -63,8 +68,8 @@ export default function App() {
     })
       .then((res) => {
         // Сначала справочник (штрихкоды, подтверждённые пользователем), затем автозаполнение из каталога,
-        // затем названия из каталога по найденным штрихкодам
-        const doc = enrichDoc(res.doc, mappingRef.current, catalogRef.current);
+        // затем названия из каталога по найденным штрихкодам; в конце — пересчёт единиц (1 блок = 10 шт)
+        const doc = applyUnitRules(enrichDoc(res.doc, mappingRef.current, catalogRef.current), settingsRef.current.unitRules);
         const self = docsRef.current.find((d) => d.id === id);
         const rel = findRelated(docsRef.current, id, doc);
         if (rel?.kind === 'page' && self) {
@@ -158,6 +163,18 @@ export default function App() {
     }
   };
 
+  const onBulk = (rows: number[], op: BulkOp) => {
+    if (current?.doc) changeDoc(current.id, (d) => ({ ...d, items: bulkEdit(d.items, rows, op) }));
+  };
+
+  /** Правила пересчёта единиц поменяли в настройках — применяем и к уже открытым накладным */
+  const applyRulesToOpen = () => {
+    const rules = settingsRef.current.unitRules;
+    const n = docsRef.current.reduce((acc, d) => acc + (d.doc?.items.filter((it) => !it.orig && it.qty !== undefined && ruleFor(it.unit, rules)).length ?? 0), 0);
+    setDocs((prev) => prev.map((d) => (d.doc ? { ...d, doc: applyUnitRules(d.doc, rules) } : d)));
+    toast(n ? `Пересчитано строк: ${n}` : 'В открытых накладных нет строк для пересчёта');
+  };
+
   const onDelete = (id: string) => {
     setDocs((prev) => {
       const next = prev.filter((d) => d.id !== id);
@@ -221,6 +238,8 @@ export default function App() {
                 onItemChange={onItemChange}
                 onItemRemove={(i) => changeDoc(current.id, (d) => ({ ...d, items: d.items.filter((_, k) => k !== i) }))}
                 onItemAdd={() => changeDoc(current.id, (d) => ({ ...d, items: [...d.items, newItem(d.items.length + 1)] }))}
+                onBulk={onBulk}
+                onItemsReplace={(items) => changeDoc(current.id, (d) => ({ ...d, items }))}
                 onDelete={() => onDelete(current.id)}
                 onRetry={() => process(current.id)}
                 toast={toast}
@@ -239,6 +258,7 @@ export default function App() {
         onClose={() => setDrawer((d) => ({ ...d, open: false }))}
         settings={settings}
         onSettings={setSettings}
+        onApplyRules={applyRulesToOpen}
         catalogSize={catalogItems.length}
         onCatalog={setCatalog}
         mapping={mapping}

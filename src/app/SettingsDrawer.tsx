@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
-import { COLUMN_LABELS, type ExportColumn, type ExportSettings } from '../core/export';
+import { COLUMN_LABELS, DEFAULT_UNIT_RULES, type ExportColumn, type ExportSettings, type UnitRule } from '../core/export';
 import { exportMappingJson, parseMappingJson, type MappingStore } from '../core/mapping';
 import { parseCatalogFile, type CatalogItem } from '../core/catalog';
 import { ALL_COLUMNS, downloadBlob } from './storage';
-import { IconX, IconTrash } from './Icons';
+import { IconX, IconTrash, IconPlus } from './Icons';
+import { UNITS } from './model';
 
 interface Props {
   open: boolean;
@@ -12,6 +13,8 @@ interface Props {
   onClose: () => void;
   settings: ExportSettings;
   onSettings: (s: ExportSettings) => void;
+  /** Применить правила пересчёта единиц к уже открытым накладным */
+  onApplyRules: () => void;
   catalogSize: number;
   onCatalog: (items: CatalogItem[]) => void;
   mapping: MappingStore;
@@ -33,6 +36,8 @@ export function SettingsDrawer(p: Props) {
     [cols[i], cols[j]] = [cols[j], cols[i]];
     p.onSettings({ ...s, columns: cols });
   };
+  const setRule = (i: number, patch: Partial<UnitRule>) =>
+    p.onSettings({ ...s, unitRules: s.unitRules.map((r, k) => (k === i ? { ...r, ...patch } : r)) });
   const toggle = (c: ExportColumn) => {
     const on = s.columns.includes(c);
     if (on && s.columns.length === 1) return;
@@ -91,6 +96,32 @@ export function SettingsDrawer(p: Props) {
             <label className="check"><input type="radio" name="qm" checked={s.qtyMode === 'pcs'} onChange={() => p.onSettings({ ...s, qtyMode: 'pcs' })} /> В штуках (72 шт, цена за штуку)</label>
             <label className="check"><input type="radio" name="qm" checked={s.qtyMode === 'packs'} onChange={() => p.onSettings({ ...s, qtyMode: 'packs' })} /> В упаковках (3 уп, цена за упаковку)</label>
             <p className="muted">Цена в файле всегда с НДС — это то, что вы платите поставщику.</p>
+            <h3>Пересчёт единиц</h3>
+            <p className="muted">
+              При загрузке накладной строки с такой единицей пересчитываются: количество умножается, единица меняется.
+              Цена и сумма остаются как в накладной. Исходное количество видно под строкой, вернуть его можно
+              кнопкой «Как в накладной» над таблицей.
+            </p>
+            <datalist id="units-list">{UNITS.map((u) => <option key={u} value={u} />)}</datalist>
+            <ul className="rules">
+              {s.unitRules.map((r, i) => (
+                <li key={i} className="rules__row">
+                  <span>1</span>
+                  <input className="rules__unit" list="units-list" value={r.from} aria-label="Единица в накладной" onChange={(e) => setRule(i, { from: e.target.value })} />
+                  <span>=</span>
+                  <input className="rules__num" type="number" min="0" step="any" value={r.factor} aria-label="Сколько" onChange={(e) => setRule(i, { factor: Number(e.target.value) })} />
+                  <input className="rules__unit" list="units-list" value={r.to} aria-label="Единица в UMAG" onChange={(e) => setRule(i, { to: e.target.value })} />
+                  <button type="button" className="icon-btn" aria-label="Удалить правило" onClick={() => p.onSettings({ ...s, unitRules: s.unitRules.filter((_, k) => k !== i) })}><IconTrash /></button>
+                </li>
+              ))}
+            </ul>
+            <div className="row-btns">
+              <button type="button" className="btn" onClick={() => p.onSettings({ ...s, unitRules: [...s.unitRules, { from: '', to: 'шт', factor: 1 }] })}><IconPlus /> Добавить правило</button>
+              {s.unitRules.length === 0 && (
+                <button type="button" className="btn btn--ghost" onClick={() => p.onSettings({ ...s, unitRules: DEFAULT_UNIT_RULES })}>Вернуть «1 блок = 10 шт»</button>
+              )}
+              <button type="button" className="btn btn--ghost" onClick={p.onApplyRules}>Применить к открытым накладным</button>
+            </div>
           </div>
         )}
 

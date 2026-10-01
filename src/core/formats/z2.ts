@@ -195,8 +195,8 @@ function findNumericAnchors(page: OcrPage, words: Word[], lineH: number): Anchor
 /** Строка «Итого»: первое слово «Итог…» ниже начала таблицы */
 function findTotalsWord(words: Word[], afterY: number): Word | undefined {
   return words
-    // «ИТОГ» OCR читает и как «УТогГ», «ЙТОГ»
-    .filter((x) => x.cy > afterY && /^[^A-Za-zА-Яа-я]{0,2}[иИuUуУйЙ][тТt][оoОO][гГr]/.test(x.text))
+    // «ИТОГ» OCR читает и как «УТогГ», «ЙТОГ», «Wroro:» (жирный шрифт)
+    .filter((x) => x.cy > afterY && /^[^A-Za-zА-Яа-я]{0,2}(?:[иИuUуУйЙ][тТt][оoОO][гГr]|[WwШш][rт][oо][rг][oо]?\W*$)/.test(x.text))
     .sort((a, b) => a.cy - b.cy)[0];
 }
 
@@ -688,10 +688,13 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       .filter((c) => UNIT_CELL_RE.test(c.text.replace(JUNK_RE, '').trim()) && (opts.code === 'none' || opts.nameSide === 'right' || c.x0 > anc.x1));
     const unitCell = unitCells.sort((x, y) => y.x1 - x.x1)[0];
     const qtyCell = colOf('qty') >= 0 ? rowCols[i][colOf('qty')] : undefined;
-    // Порядок: чётко прочитанная кириллица, второй проход с фильтром букв, похожие на единицу слова
+    const planCell = colOf('qtyPlan') >= 0 ? rowCols[i][colOf('qtyPlan')] : undefined;
+    // Порядок: единица в самой ячейке количества («5 бут» — сначала «Общее», а не «Штук»: «5 шт.»),
+    // чётко прочитанная кириллица, второй проход с фильтром букв, похожие на единицу слова
+    const cellUnit = normalizeUnit(planCell?.num?.unit) ?? normalizeUnit(qtyCell?.num?.unit);
     const clean = unitCell?.text.replace(JUNK_RE, '').trim() ?? '';
     const exact = /^(шт|штука|штук|кг|блок|бут|л|уп|упак|пач|пачка|кор|бан|банка)\.?$/i.test(clean) ? normalizeUnit(clean) : undefined;
-    const unit = exact ?? stripUnits[i] ?? normalizeUnit(unitCell?.text) ?? normalizeUnit(qtyCell?.num?.unit)
+    const unit = cellUnit ?? exact ?? stripUnits[i] ?? normalizeUnit(unitCell?.text)
       ?? normalizeUnit(cells.find((c) => !c.num && !extractNumbers(c.text).length && /[A-Za-zА-Яа-я]/.test(c.text) && c.x0 > anc.x1 && c.x1 < numsLeftEdge - lineH)?.text);
     const unitWords = new Set(unitCell?.words ?? []);
 
@@ -710,7 +713,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       const right = Math.min(anc.x0 + half, articleX0 !== undefined ? articleX0 - lineH * 0.3 : Infinity);
       nameWords = bandWords.filter((w) => w.x1 <= right && w.x0 < codeX0);
     }
-    const name = cleanName(nameWords, lineH, opts.nameSide === 'inline');
+    const name = cleanName(nameWords, lineH, opts.nameSide === 'inline', i + 1);
     // NTIN из строки («NTIN: 0200132903914» у Евразиан, столбец NTIN у Yupiter): в UMAG часть товаров
     // заведена со штрихкодом, равным NTIN, — по нему каталог найдёт товар точно
     // (неуверенно прочитанный NTIN может совпасть с кодом другого товара — такие не берём)
@@ -754,9 +757,11 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       raw: [wordsToText(nameWords, lineH), anc.code, ...cells.map((c) => c.text)].filter(Boolean).join(' | '),
     };
     if (opts.code !== 'none') applyCode(item, anc, opts);
-    if (!name) item.issues.push(issue('warn', 'Не прочитано наименование'));
+    if (!name) item.issues.push(issue('warn', 'Не прочитано наименование', 'noname'));
     doc.items.push(item);
   });
+
+  if (opts.code === 'ean') repairByNeighbors(doc.items);
 
   // Единица не прочитана: дробное количество — кг; иначе единица всей накладной, если она одна,
   // или соседних строк (товары обычно сгруппированы: весовые подряд, штучные подряд)
@@ -791,7 +796,12 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
   const sumC = totalRead('sum', rowsSum), vatC = totalRead('vat', rowsVat);
   const qtyC = totalsWords ? [...totalRead('qty', 0), ...totalRead('qtyPlan', 0)] : [];
   // Итог иногда напечатан между столбцами — берём все деньги строки «Итого»
-  const looseC = trust(totCells.flatMap((c) => extractNumbers(fixDigits(c.text.replace(JUNK_RE, ' '))).filter((t) => t.hasDecimals).map((t) => t.value)), rowsSum);
+  const looseC = [
+    ...trust(totCells.flatMap((c) => extractNumbers(fixDigits(c.text.replace(JUNK_RE, ' '))).filter((t) => t.hasDecimals).map((t) => t.value)), rowsSum),
+    // «1442400» — итог без запятой (14 424,00) в любом столбце строки «Итого»: берём, только если сходится со строками
+    ...totCells.flatMap((c) => extractNumbers(fixDigits(c.text.replace(JUNK_RE, ' '))).filter((t) => !t.hasDecimals && t.text.length >= 5)
+      .map((t) => t.value / 100)).filter((v) => near(v, rowsSum, tol)),
+  ];
   if (sumC.length || vatC.length || qtyC.length || looseC.length) {
     const sum = [...sumC, ...looseC].find((x) => near(x, rowsSum, tol)) ?? sumC.find((x) => x >= 1) ?? sumC[0];
     doc.totals = {
@@ -835,6 +845,36 @@ function findShortArticleColumn(words: Word[], anchors: Anchor[], codeX0: number
   return best.members[0];
 }
 
+/**
+ * Штрихкод не прошёл проверку контрольной цифры: у товаров одного производителя в накладной
+ * начало штрихкода общее (префикс производителя — 8–9 цифр). Замена одной цифры, дающая верный EAN
+ * с началом как у соседней строки, — вероятное прочтение; берём, только если такой вариант один.
+ */
+function repairByNeighbors(items: ParsedItem[]) {
+  const good = items.map((it) => (it.barcode && isValidEan(it.barcode) ? it.barcode : undefined));
+  items.forEach((it, i) => {
+    if (!it.barcode || isValidEan(it.barcode) || !it.issues.some((x) => x.kind === 'ean')) return;
+    // прочтения: сам код и 13 цифр без прилипшего № строки или лишней цифры в конце
+    const reads = [...new Set([it.barcode, it.code].filter((c): c is string => !!c)
+      .flatMap((c) => (c.length === 13 ? [c] : c.length > 13 && c.length <= 15 ? [c.slice(-13), c.slice(0, 13)] : [])))];
+    const others = good.filter((g, k): g is string => !!g && k !== i);
+    const cands = new Set<string>();
+    for (const r of reads) {
+      for (let p = 0; p < 13; p++) {
+        for (let d = 0; d <= 9; d++) {
+          const c = r.slice(0, p) + d + r.slice(p + 1);
+          if (c !== r && isValidEan(c) && others.some((o) => o.slice(0, 8) === c.slice(0, 8))) cands.add(c);
+        }
+      }
+    }
+    if (cands.size !== 1) return;
+    const fixed = [...cands][0];
+    it.issues = it.issues.filter((x) => x.kind !== 'ean');
+    it.issues.push(issue('warn', `Штрихкод прочитан как ${it.barcode} — исправлен по контрольной цифре и соседним строкам на ${fixed}, сверьте`));
+    it.barcode = fixed;
+  });
+}
+
 /** Перенесённая последняя цифра штрихкода: одна цифра строкой ниже, под кодом */
 function appendWrappedDigit(anc: Anchor, words: Word[], lineH: number) {
   const short = (c?: string) => !!c && c.length === 12 && !isValidEan(c);
@@ -849,7 +889,7 @@ function appendWrappedDigit(anc: Anchor, words: Word[], lineH: number) {
   if (short(anc.stripCode)) anc.stripCode += d;
 }
 
-function cleanName(allWords: Word[], lineH: number, inlineCode = false): string {
+function cleanName(allWords: Word[], lineH: number, inlineCode = false, rowNo?: number): string {
   // Линии сетки и печати OCR читает как «П О Г ВИ Ш» с низкой уверенностью — такие строки выбрасываем
   const lines = new Map<number, Word[]>();
   for (const w of allWords) lines.set(w.line, [...(lines.get(w.line) ?? []), w]);
@@ -857,9 +897,14 @@ function cleanName(allWords: Word[], lineH: number, inlineCode = false): string 
   const junk = new Set([...lines].filter(([, ws]) => ws.filter((w) => w.conf < 50).length >= ws.length * 0.5
     && !ws.some((w) => w.conf >= 80 && /[A-Za-zА-Яа-яЁё]{3,}/.test(w.text))).map(([li]) => li));
   const nameWords = allWords.filter((w) => !junk.has(w.line) && !(w.conf < 30 && w.text.length <= 3) && !(w.conf < 60 && w.text.length <= 2 && !/\d/.test(w.text)));
-  // отрезаем № п/п и мусор в начале строк названия
+  // отрезаем № п/п и мусор в начале строк названия: короткое слово без букв, первое в своей строке
+  // (не \W — в JS это «не латиница», под него попадали «Хлеб», «с/к», «Для»; и не «300» в середине названия)
   const mx = median(nameWords.map((x) => x.x0));
-  const nameClean = nameWords.filter((w) => !(/^[\W\d_]{0,4}$/.test(w.text) && w.x0 < mx));
+  const lineStart = new Map<number, number>();
+  for (const w of nameWords) lineStart.set(w.line, Math.min(lineStart.get(w.line) ?? Infinity, w.x0));
+  // № строки — и не первым словом, если левее прилип мусор от края листа («‘ot 10 Огурец»)
+  const isRowNo = (w: Word) => rowNo !== undefined && w.text.replace(/\D/g, '') === String(rowNo) && /^[^A-Za-zА-Яа-яЁё]{1,4}$/.test(w.text);
+  const nameClean = nameWords.filter((w) => !(w.x0 < mx && (isRowNo(w) || (/^[^A-Za-zА-Яа-яЁё]{0,4}$/.test(w.text) && w.x0 <= (lineStart.get(w.line) ?? 0)))));
   let name = wordsToText(nameClean.filter((w) => /[A-Za-zА-Яа-яЁё0-9]/.test(w.text)), lineH)
     // «0.45'24_IM_KAZ» — знак между числами заменяем пробелом, иначе объём склеится с упаковкой («0.4524»)
     .replace(/(\d)[`'’°_~^](\d)/g, '$1 $2')
@@ -868,6 +913,10 @@ function cleanName(allWords: Word[], lineH: number, inlineCode = false): string 
     .replace(/\bNTIN:?\s*[\d\s]*/gi, ' ')
     .replace(/\b\d{10,}\b/g, ' ')
     .replace(/^[\s\-—–.,:;]+/, '')
+    // «г» и «в/у» OCR читает латиницей: «70r», «250r/6», «70 rp», «Bly» (марки латиницей не трогаем)
+    .replace(/(\d)\s?r(?=[\s/]|$)/g, '$1г')
+    .replace(/(^|\s)rp(?=\s|$)/g, '$1гр')
+    .replace(/(^|\s)[BbЕe]ly(?=\s|$)/g, '$1в/у')
     .replace(/\s{2,}/g, ' ')
     .trim();
   // Строки заголовка таблицы попадают в первую строку — отрезаем
@@ -970,8 +1019,34 @@ function findDate(t: string): { date: string; index: number } | undefined {
   return undefined;
 }
 
+/**
+ * Номер и дата, перенесённые в узкой ячейке шапки: «АКЦ6594» / «5», «30.09.20» / «26» (ЭльвиНиПлюс).
+ * Продолжение — слово из цифр прямо под началом, в пределах его ширины.
+ */
+function findWrappedNumberAndDate(page: OcrPage): { number?: string; date?: string } {
+  const words = flattenWords(page);
+  const lineH = typicalLineHeight(words, page);
+  const below = (w: Word, re: RegExp) => words.find((x) => re.test(x.text) && x.cy > w.cy + lineH * 0.5 && x.cy < w.cy + lineH * 2.2
+    && x.cx > w.x0 && x.cx < w.x1);
+  for (const w of words) {
+    const m = w.text.match(/^(\d{2})[.,](\d{2})[.,](20)$/);
+    if (!m || w.cy > page.height * 0.45) continue;
+    const tail = below(w, /^\d{2}$/);
+    if (!tail) continue;
+    const date = `${m[1]}.${m[2]}.20${tail.text}`;
+    // номер — слово левее даты в той же строке, тоже с переносом
+    const left = words.filter((x) => Math.abs(x.cy - w.cy) < lineH * 0.5 && x.x1 < w.x0 && /^[A-Za-zА-Яа-яЁё]{1,4}\d{3,}$/.test(x.text))
+      .sort((a, b) => b.x1 - a.x1)[0];
+    const numTail = left && below(left, /^\d{1,3}$/);
+    return { date, number: left ? left.text + (numTail?.text ?? '') : undefined };
+  }
+  return {};
+}
+
 /** Номер и дата документа */
 export function findNumberAndDate(page: OcrPage): { number?: string; date?: string } {
+  const wrapped = findWrappedNumberAndDate(page);
+  if (wrapped.date) return wrapped;
   const lines = page.lines.map((l) => l.text);
   // «Номер реализации: АВ000103427» / «Внутренний номер: …» (упаковочный лист, в т.ч. вторая страница)
   let number: string | undefined;

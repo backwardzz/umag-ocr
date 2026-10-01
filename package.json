@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "ocr": "tsx scripts/ocr-cli.ts",
-    "test": "tsx scripts/test-catalog-names.ts && tsx scripts/test-parsers.ts",
+    "test": "tsx scripts/test-units.ts && tsx scripts/test-catalog-names.ts && tsx scripts/test-parsers.ts",
     "catalog": "tsx scripts/eval-catalog.ts"
   },
   "dependencies": {

@@ -37,6 +37,8 @@ export interface Candidate {
   score: number;
   /** Сколько независимых прочтений точно подтверждают вариант */
   support: number;
+  /** Цена и сумма прочитаны точно (а не выведены) */
+  priceSumRead?: boolean;
 }
 
 export interface RowSolution {
@@ -154,7 +156,7 @@ export function solveRow(r: RowReadings): RowSolution {
       if (r.weight && !Number.isInteger(q)) score += 0.5;
       // «отпущено» обычно равно «подлежит отпуску» или чуть меньше (усушка) — но не в 10 раз
       if (!planHits && plan.some((x) => Math.abs(x - q) <= x * 0.1)) score += 0.5;
-      cands.push({ qty: q, price: p, sum: sFinal, score, support });
+      cands.push({ qty: q, price: p, sum: sFinal, score, support, priceSumRead: priceReads > 0 && sRead !== undefined });
     }
   }
   // Сначала — больше независимых подтверждений (кол-во, цена, сумма, НДС), затем баллы:
@@ -173,6 +175,10 @@ export function solveRow(r: RowReadings): RowSolution {
   const vat = vatOf(best.sum, r.vatRate, r.vatIncluded);
   if (best.support <= 1) {
     issues.push(issue('error', 'Числа строки не сходятся — проверьте количество, цену и сумму'));
+  } else if (best.support === 2 && best.priceSumRead && Number.isInteger(best.qty)) {
+    // Количество не прочиталось (галочка поверх, «бут» вместо цифры), но цена и сумма прочитаны
+    // точно и делятся нацело — количество надёжно: сумма / цена
+    issues.push(issue('info', 'Количество вычислено: сумма / цена'));
   } else if (best.support === 2 && sumC.length > 0 && priceC.length > 0) {
     issues.push(issue('warn', 'Часть чисел прочитана с ошибкой, значения восстановлены по арифметике — проверьте'));
   } else {

@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
 import type { ParsedDoc, ParsedItem } from '../core/types';
 import { buildRows, exportFileName, mergedLineCount, toTsv, toXlsxBlob, toReportBlob, type ExportSettings } from '../core/export';
-import { summarize, money, type DocEntry } from './model';
+import { summarize, money, type BulkOp, type DocEntry } from './model';
 import { ItemsTable } from './ItemsTable';
+import { BulkBar } from './BulkBar';
 import { downloadBlob, copyText } from './storage';
 import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh } from './Icons';
 
@@ -18,18 +19,43 @@ interface Props {
   onItemChange: (index: number, patch: Partial<ParsedItem>) => void;
   onItemRemove: (index: number) => void;
   onItemAdd: () => void;
+  /** Массовая правка строк (пересчёт единиц, × / ÷, единица, вернуть как в накладной) */
+  onBulk: (rows: number[], op: BulkOp) => void;
+  /** Заменить все строки — для отмены массовой правки */
+  onItemsReplace: (items: ParsedItem[]) => void;
   onDelete: () => void;
   onRetry: () => void;
   toast: (text: string) => void;
 }
 
-export function DocView({ entry, settings, catalog, onDocChange, onItemChange, onItemRemove, onItemAdd, onDelete, onRetry, toast }: Props) {
+export function DocView({ entry, settings, catalog, onDocChange, onItemChange, onItemRemove, onItemAdd, onBulk, onItemsReplace, onDelete, onRetry, toast }: Props) {
   const [view, setView] = useState<'photo' | 'ocr'>('photo');
   const [zoom, setZoom] = useState(1);
   // На узких экранах фото над таблицей; его можно свернуть
   const [photoOpen, setPhotoOpen] = useState(() => window.innerWidth >= 1400);
   const [pageIdx, setPageIdx] = useState(0);
   const doc = entry.doc;
+  // Выбор строк для массовых правок; строки добавили или удалили — номера сдвинулись, выбор сбрасываем
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const lastClick = useRef<number>();
+  const [undo, setUndo] = useState<ParsedItem[]>();
+  const count = doc?.items.length ?? 0;
+  useEffect(() => { setSelected(new Set()); setUndo(undefined); }, [count]);
+
+  const toggle = (i: number, range: boolean) => {
+    const next = new Set(selected);
+    const on = !next.has(i);
+    const from = range && lastClick.current !== undefined ? Math.min(lastClick.current, i) : i;
+    const to = range && lastClick.current !== undefined ? Math.max(lastClick.current, i) : i;
+    for (let k = from; k <= to; k++) { if (on) next.add(k); else next.delete(k); }
+    lastClick.current = i;
+    setSelected(next);
+  };
+  const bulk = (rows: number[], op: BulkOp) => {
+    if (!doc) return;
+    setUndo(doc.items);
+    onBulk(rows, op);
+  };
   const open = photoOpen || !doc;
   const pages = [{ fileUrl: entry.fileUrl, processedUrl: entry.processedUrl }, ...(entry.extraPages ?? [])];
   const page = pages[Math.min(pageIdx, pages.length - 1)];
@@ -152,7 +178,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           В файл: {s.exportable} из {s.rows}{s.missingBarcode ? ` · ${s.missingBarcode} без штрихкода` : ''}
         </span>
         {merged > 0 && (
-          <span className="chip" title="Строки с одинаковым штрихкодом (например, бонусные по 1 ₸) или с одинаковым названием из базы UMAG складываются в одну: количество суммируется, цена — средняя, штрихкод — из первой строки">
+          <span className="chip" title="Строки с одинаковым штрихкодом (например, бонусные по 1 ₸) и разные штрихкоды одного товара UMAG (вкусы, заведённые дополнительными штрихкодами) складываются в одну: количество суммируется, цена — средняя, штрихкод — основной штрихкод товара">
             Одинаковые товары сложены: {dataRows} строк в файле
           </span>
         )}
@@ -171,7 +197,11 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
       <div className="docview__body">
         {photo}
         <section className="items-panel">
-          <ItemsTable items={doc.items} catalog={catalog} onChange={onItemChange} onRemove={onItemRemove} onAdd={onItemAdd} />
+          <BulkBar items={doc.items} selected={selected} onSelect={setSelected} rules={settings.unitRules} onBulk={bulk}
+            canUndo={!!undo} onUndo={() => { if (undo) { onItemsReplace(undo); setUndo(undefined); } }} />
+          <ItemsTable items={doc.items} catalog={catalog} onChange={(i, patch) => { setUndo(undefined); onItemChange(i, patch); }} onRemove={onItemRemove} onAdd={onItemAdd}
+            selected={selected} onToggle={toggle} onToggleAll={(on) => setSelected(new Set(on ? doc.items.map((_, i) => i) : []))}
+            onScale={(i, field, factor) => bulk([i], { kind: 'scale', field, factor })} />
           {autofilled > 0 && (
             <p className="autofill-note">
               <IconAlert /> Штрихкоды в {autofilled} {plural(autofilled, 'строке', 'строках', 'строках')} заполнены или исправлены автоматически
