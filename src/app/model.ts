@@ -351,7 +351,10 @@ const withOrig = (it: ParsedItem): ParsedItem => (it.orig ? it : { ...it, orig: 
 export type BulkOp =
   | { kind: 'scale'; field: 'qty' | 'price'; factor: number }
   | { kind: 'unit'; unit?: string }
-  /** Пересчёт единиц: количество × factor и новая единица (1 блок = 10 шт) */
+  /**
+   * Пересчёт единиц под приёмку UMAG: количество × factor, цена ÷ factor и новая единица
+   * (1 блок по 11 618 = 10 шт по 1 161,80). Сумма не меняется.
+   */
   | { kind: 'convert'; factor: number; unit: string }
   /** Вернуть количество, единицу и цену как в накладной */
   | { kind: 'restore' };
@@ -365,7 +368,13 @@ export function bulkEditItem(it: ParsedItem, op: BulkOp): ParsedItem {
   if (op.kind === 'unit') return unitKey(op.unit) === unitKey(it.unit) ? it : { ...withOrig(it), unit: op.unit || undefined };
   if (!(op.factor > 0) || op.factor === 1) return it;
   if (op.kind === 'convert') {
-    return fixPack({ ...withOrig(it), qty: it.qty === undefined ? undefined : round3(it.qty * op.factor), unit: op.unit });
+    return fixPack({
+      ...withOrig(it),
+      qty: it.qty === undefined ? undefined : round3(it.qty * op.factor),
+      // UMAG принимает цену за единицу: блок стал десятью пачками — цена пачки в 10 раз меньше
+      price: it.price === undefined ? undefined : round2(it.price / op.factor),
+      unit: op.unit,
+    });
   }
   const v = it[op.field];
   if (v === undefined) return it;
@@ -388,7 +397,7 @@ export function ruleFor(unit: string | undefined, rules: UnitRule[]): UnitRule |
 }
 
 /**
- * Пересчёт единиц при загрузке накладной (сигареты: 1 блок = 10 шт). Строки, уже пересчитанные
+ * Пересчёт единиц при загрузке накладной (сигареты: 1 блок = 10 шт, цена блока ÷ 10). Строки, уже пересчитанные
  * или поправленные вручную, не трогаем — правило можно применять повторно.
  */
 export function applyUnitRules(doc: ParsedDoc, rules: UnitRule[]): ParsedDoc {

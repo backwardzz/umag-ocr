@@ -72,7 +72,7 @@ export function BulkBar({ items, selected, onSelect, rules, onBulk, canUndo, onU
       <div className="bulk__row">
         {presets.map(({ r, rows }) => (
           <button key={`${r.from}-${r.to}-${r.factor}`} type="button" className="btn" disabled={!rows.length}
-            title={`Количество × ${r.factor}, единица «${r.to}»; цена и сумма — как в накладной`}
+            title={`Количество × ${r.factor}, цена ÷ ${r.factor}, единица «${r.to}»; сумма — как в накладной`}
             onClick={() => run({ kind: 'convert', factor: r.factor, unit: r.to }, rows)}>
             1 {r.from} → {r.factor} {r.to}{!selected.size && rows.length ? ` (${rows.length})` : ''}
           </button>

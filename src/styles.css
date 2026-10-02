@@ -395,3 +395,5 @@ button, input { font: inherit; color: inherit; }
 @media (max-width: 560px) {
   .formats__row { grid-template-columns: 1fr; gap: 2px; }
 }
+/* «было 11 618,00» под ценой — одной строкой */
+.cell-sub--num { white-space: nowrap; flex-wrap: nowrap; }

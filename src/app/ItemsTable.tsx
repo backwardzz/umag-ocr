@@ -206,7 +206,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                 <td className="c-num">
                   <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} onScale={(f) => onScale(i, 'qty', f)} />
                   {it.orig && (it.orig.qty !== it.qty || it.orig.unit !== it.unit) && (
-                    <div className="cell-sub cell-sub--num" title="Так в накладной — количество пересчитано (цена и сумма как в накладной)">
+                    <div className="cell-sub cell-sub--num" title="Так в накладной — количество и цена пересчитаны под приёмку UMAG (сумма как в накладной)">
                       было {qtyFmt(it.orig.qty)} {it.orig.unit ?? ''}
                     </div>
                   )}
