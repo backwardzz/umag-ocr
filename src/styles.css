@@ -447,13 +447,6 @@ button, input { font: inherit; color: inherit; }
   .items td.c-bc { padding-top: 19px; }
   .items td.c-n { padding-top: 26px !important; }
 }
-/* «Проверено»: снять предупреждения со строки, сверенной с накладной */
-.approve {
-  display: inline-flex; align-items: center; gap: 5px; margin: 6px 8px 2px; padding: 3px 10px;
-  border: 1px solid var(--warn-strong); border-radius: 999px; background: transparent; color: var(--warn);
-  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
-}
-.approve svg { width: 14px; height: 14px; }
-.approve:hover { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+/* «Всё верно»: снять предупреждения со всех жёлтых строк */
 .chip--btn { cursor: pointer; font: inherit; font-size: inherit; color: var(--text); background: var(--surface); }
 .chip--btn:hover { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }

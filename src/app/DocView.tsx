@@ -176,7 +176,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
         {s.warnings > 0 && (
           <button type="button" className="chip chip--btn" title="Все жёлтые строки сверены с накладной — снять предупреждения"
             onClick={() => onItemsReplace(approveAll(doc.items, catalog))}>
-            <IconCheck /> Проверено всё
+            <IconCheck /> Всё верно
           </button>
         )}
         <span className={`chip ${s.missingBarcode ? 'chip--warn' : ''}`}>
