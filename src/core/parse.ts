@@ -118,7 +118,14 @@ function addTextTotals(doc: ParsedDoc, page: OcrPage) {
   if (doc.totals?.sum !== undefined && near(doc.totals.sum, rows, tol)) return;
   const found: number[] = [];
   page.lines.forEach((l, i) => {
-    if (!/[иуй]тог|всего|к\s*оплате|на\s+сумму/i.test(l.text)) return;
+    // «в том числе сумма НДС …» стоит сразу под итогом: слово «ИТОГ» жирным OCR читает как «For:», «ито”:».
+    // Строку выше берём, только если в ней одно-два числа (в строке товара их больше)
+    if (/в\s+том\s+числе.{0,20}НДС/i.test(l.text) && i > 0) {
+      const toks = extractNumbers(fixDigits(page.lines[i - 1].text.replace(/[`'’‘"“”„°|\]\[‚]/g, ' ')));
+      if (toks.length <= 2) for (const tok of toks) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
+    }
+    // («ито”:» — так OCR читает жирное «ИТОГ:» без последней буквы)
+    if (!/[иуй]тог|(?:^|\s)ито[^А-Яа-яA-Za-z]|всего|к\s*оплате|на\s+сумму/i.test(l.text)) return;
     for (const t of [l.text, page.lines[i + 1]?.text ?? '']) {
       for (const tok of extractNumbers(fixDigits(t.replace(/[`'’‘"“”„°|\]\[]/g, ' ')))) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
     }
