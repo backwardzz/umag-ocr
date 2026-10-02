@@ -224,8 +224,9 @@ button, input { font: inherit; color: inherit; }
 .pv--full .pv__tools { right: 16px; bottom: 16px; }
 
 .items-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
-.table-wrap { overflow-x: auto; }
-.items { width: 100%; min-width: 850px; border-collapse: collapse; }
+.table-wrap { overflow-x: auto; container: items / inline-size; }
+/* Таблица всегда вмещается в свою панель: ширины колонок заданы, наименование забирает остаток */
+.items { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .items th {
   text-align: left; font-size: 12px; font-weight: 600; color: var(--muted);
   padding: 8px 6px; border-bottom: 1px solid var(--border); background: var(--surface-2); white-space: nowrap;
@@ -233,18 +234,22 @@ button, input { font: inherit; color: inherit; }
 }
 .items td { padding: 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .items tr:last-child td { border-bottom: 0; }
-.c-n { width: 32px; color: var(--muted); text-align: right; padding-top: 13px !important; }
-.c-bc { width: 170px; min-width: 170px; }
-.c-name { min-width: 220px; }
-.c-num { width: 110px; min-width: 96px; text-align: right; }
+.c-n { width: 28px; color: var(--muted); text-align: right; padding-top: 13px !important; }
+.c-bc { width: 142px; }
+.c-name { width: auto; }
+.c-num { width: 92px; text-align: right; }
+.c-qty { width: 70px; }
+.items .c-sum { width: 96px; }
+.items .cell-input { padding: 0 6px; min-width: 0; }
+.items td { overflow-wrap: anywhere; }
 .items th.c-num { text-align: right; }
-.c-unit { width: 88px; min-width: 80px; }
+.c-unit { width: 64px; }
 /* «шт» мелким шрифтом читается как «шп»: единицы — крупнее, жирнее и с разрядкой */
 .c-unit .cell-input { font-size: 15px; font-weight: 600; letter-spacing: 0.08em; }
 /* стрелка списка подсказок съедает половину узкого поля — «пачка» и «блок» не помещаются */
 .c-unit .cell-input::-webkit-calendar-picker-indicator { display: none !important; }
 .c-sum { padding-top: 13px !important; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.c-st { width: 72px; white-space: nowrap; }
+.c-st { width: 70px; white-space: nowrap; }
 .row--error { background: color-mix(in srgb, var(--err-soft) 55%, transparent); }
 .row--warn { background: color-mix(in srgb, var(--warn-soft) 55%, transparent); }
 .row--error td:first-child { box-shadow: inset 3px 0 0 var(--err); }
@@ -361,7 +366,8 @@ button, input { font: inherit; color: inherit; }
 /* ---------- узкие экраны ---------- */
 .photo--collapsed .photo__view { display: none; }
 .photo--collapsed .photo__bar { border-bottom: 0; }
-@media (max-width: 1399px) {
+/* фото рядом с таблицей — только когда таблице остаётся достаточно места */
+@media (max-width: 1499px) {
   .docview__body { grid-template-columns: 1fr; }
   .photo { position: static; max-height: none; }
   .photo:not(.photo--collapsed) { height: 60vh; }
@@ -373,7 +379,35 @@ button, input { font: inherit; color: inherit; }
   .pv__hint { display: none; }
   .topbar { padding: 8px 12px; }
   .docview { padding: 12px; }
-  .c-name { min-width: 180px; }
+}
+
+/* Узкая панель таблицы (телефон, окно в полэкрана): строка товара — карточка в три ряда
+   (название · штрихкод · количество, единица, цена, сумма). Считаем по ширине панели, а не экрана:
+   рядом могут стоять список накладных и фото */
+@container items (max-width: 700px) {
+  .items, .items tbody { display: block; }
+  .items thead { display: none; }
+  .items tr {
+    display: grid; grid-template-columns: 28px minmax(0, 0.75fr) minmax(0, 0.7fr) minmax(0, 1.1fr) minmax(0, 1.25fr);
+    grid-template-areas: 'sel name name name st' 'n bc bc bc bc' 'n qty unit price sum';
+    padding: 6px 4px; border-bottom: 1px solid var(--border);
+  }
+  .items tr:last-child { border-bottom: 0; }
+  .items tr > td { display: block; width: auto !important; min-width: 0; border-bottom: 0; padding: 3px 4px; }
+  .items td.c-sel { grid-area: sel; }
+  .items td.c-n { grid-area: n; text-align: center; padding-top: 10px !important; }
+  .items td.c-bc { grid-area: bc; }
+  .items td.c-name { grid-area: name; }
+  .items td.c-qty { grid-area: qty; }
+  .items td.c-unit { grid-area: unit; }
+  .items td.c-price { grid-area: price; }
+  .items td.c-sum { grid-area: sum; padding-top: 3px !important; }
+  .items td.c-st { grid-area: st; text-align: right; }
+  .items td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); padding: 0 6px 1px; text-align: inherit; }
+  .items td.c-sum::before { padding-right: 0; }
+  .items td.c-sum { line-height: 32px; }
+  .items td.c-sum::before { line-height: 1.45; }
+  .cell-sub--num { white-space: normal; flex-wrap: wrap; }
 }
 
 /* Список принимаемых накладных (стартовая страница и окно справки) */
@@ -397,3 +431,19 @@ button, input { font: inherit; color: inherit; }
 }
 /* «было 11 618,00» под ценой — одной строкой */
 .cell-sub--num { white-space: nowrap; flex-wrap: nowrap; }
+/* самые узкие телефоны (320 px): панель правок переносится, числа чуть мельче */
+.bulk__group { flex-wrap: wrap; max-width: 100%; }
+@container items (max-width: 320px) {
+  .items tr > td, .items .cell-input { font-size: 13px; }
+  .items .cell-input { padding: 0 4px; }
+  .items tr > td { padding: 3px 2px; }
+}
+/* панель средней ширины (планшет, окно в полэкрана): карточка в два ряда — название, под ним штрихкод и числа */
+@container items (min-width: 520px) and (max-width: 700px) {
+  .items tr {
+    grid-template-columns: 28px 150px minmax(0, 0.8fr) 64px minmax(0, 1fr) minmax(0, 1.1fr);
+    grid-template-areas: 'sel name name name name st' 'n bc qty unit price sum';
+  }
+  .items td.c-bc { padding-top: 19px; }
+  .items td.c-n { padding-top: 26px !important; }
+}

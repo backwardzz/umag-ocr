@@ -126,10 +126,10 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
             <th className="c-n">№</th>
             <th className="c-bc">Штрихкод</th>
             <th className="c-name">Наименование</th>
-            <th className="c-num">Кол-во</th>
+            <th className="c-num c-qty">Кол-во</th>
             <th className="c-unit">Ед. изм</th>
-            <th className="c-num">Цена, ₸</th>
-            <th className="c-num">Сумма, ₸</th>
+            <th className="c-num c-price">Цена, ₸</th>
+            <th className="c-num c-sum">Сумма, ₸</th>
             <th className="c-st" aria-label="Статус" />
           </tr>
         </thead>
@@ -203,7 +203,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                     </ul>
                   )}
                 </td>
-                <td className="c-num">
+                <td className="c-num c-qty" data-label="Кол-во">
                   <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} onScale={(f) => onScale(i, 'qty', f)} />
                   {it.orig && (it.orig.qty !== it.qty || it.orig.unit !== it.unit) && (
                     <div className="cell-sub cell-sub--num" title="Так в накладной — количество и цена пересчитаны под приёмку UMAG (сумма как в накладной)">
@@ -214,14 +214,14 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                     <div className="cell-sub cell-sub--num">{qtyFmt(it.pack.count)} уп × {it.pack.size}</div>
                   )}
                 </td>
-                <td className="c-unit">
+                <td className="c-unit" data-label="Ед.">
                   <TextInput value={it.unit ?? ''} label={`Ед. изм, строка ${i + 1}`} list="units-table" onCommit={(v) => onChange(i, { unit: v || undefined })} />
                 </td>
-                <td className="c-num">
+                <td className="c-num c-price" data-label="Цена, ₸">
                   <NumInput money value={it.price} label={`Цена, строка ${i + 1}`} invalid={it.price === undefined} onCommit={(v) => onChange(i, { price: v })} onScale={(f) => onScale(i, 'price', f)} />
                   {it.orig && it.orig.price !== it.price && <div className="cell-sub cell-sub--num" title="Цена в накладной">было {money(it.orig.price)}</div>}
                 </td>
-                <td className="c-num c-sum">{money(it.sum)}</td>
+                <td className="c-num c-sum" data-label="Сумма, ₸">{money(it.sum)}</td>
                 <td className="c-st">
                   <span
                     className={`st st--${level}`}
