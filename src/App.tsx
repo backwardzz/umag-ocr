@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { recognizeInvoice, isAbort } from './ocr/engine';
+import { isPdf, pdfToPages } from './ocr/pdf';
 import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from './core/mapping';
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
@@ -100,7 +101,7 @@ export default function App() {
       .finally(() => { if (aborts.current.get(id) === ctl) aborts.current.delete(id); });
   }, [update]);
 
-  const addFiles = useCallback((list: File[]) => {
+  const addImages = useCallback((list: File[]) => {
     const entries: DocEntry[] = list.map((f) => {
       const id = newId();
       files.current.set(id, f);
@@ -111,6 +112,21 @@ export default function App() {
     entries.forEach((e) => process(e.id));
   }, [process]);
 
+  /** Фото — сразу в очередь; PDF сначала раскладывается на страницы (каждая страница — как фото) */
+  const addFiles = useCallback(async (list: File[]) => {
+    for (const f of list) {
+      if (!isPdf(f)) { addImages([f]); continue; }
+      toast(`Открываю «${f.name}»…`);
+      try {
+        const pages = await pdfToPages(f);
+        addImages(pages);
+        if (pages.length > 1) toast(`«${f.name}»: ${pages.length} стр. — страницы одной накладной склеятся сами`);
+      } catch (err) {
+        toast(`Не удалось открыть «${f.name}»: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }, [addImages, toast]);
+
   // Режим разработки: ?demo загружает примеры из samples/ (в сборку не попадают)
   useEffect(() => {
     const w = window as unknown as { __demoLoaded?: boolean };
@@ -119,8 +135,10 @@ export default function App() {
     w.__demoLoaded = true;
     const names = (new URLSearchParams(location.search).get('demo') || '1,2,3').split(',');
     Promise.all(names.map(async (n) => {
-      const r = await fetch(`/samples/${n}.jpg`);
-      return new File([await r.blob()], `${n}.jpg`, { type: 'image/jpeg' });
+      // «eurasian_3427.pdf» — как есть, без расширения — фото .jpg
+      const name = n.includes('.') ? n : `${n}.jpg`;
+      const r = await fetch(`/samples/${name}`);
+      return new File([await r.blob()], name, { type: name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg' });
     })).then(addFiles);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -218,11 +236,11 @@ export default function App() {
 
       {docs.length === 0 ? (
         <main className="empty">
-          <h1>Фото накладной → Excel для UMAG</h1>
-          <p className="muted">Распознавание работает прямо в браузере, фото никуда не отправляются.</p>
+          <h1>Фото или PDF накладной → Excel для UMAG</h1>
+          <p className="muted">Распознавание работает прямо в браузере, фото и PDF никуда не отправляются.</p>
           <UploadZone onFiles={addFiles} />
           <ol className="empty__steps">
-            <li><b>Сфотографируйте</b> накладную или выберите готовые фото</li>
+            <li><b>Сфотографируйте</b> накладную или выберите готовые фото или PDF</li>
             <li><b>Проверьте</b> строки, отмеченные жёлтым или красным</li>
             <li><b>Скачайте Excel</b> и загрузите его в UMAG: «Приёмка» → «Импорт товаров»</li>
           </ol>

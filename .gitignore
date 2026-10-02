@@ -4,6 +4,7 @@ out/
 *.traineddata
 # Движок и модели OCR скачиваются при npm install (scripts/copy-ocr-assets.mjs)
 public/tesseract/
+public/pdfjs/
 # Реальные накладные (фото и распознанный текст с БИН, названиями, суммами).
 # Уберите эту строку, только если репозиторий приватный.
 samples/

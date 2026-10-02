@@ -40,3 +40,13 @@ for (const l of ['rus', 'eng']) {
   await download(LANG_URL(l), dest);
 }
 console.log('OCR-ресурсы готовы: public/tesseract');
+
+// pdf.js: кодировки и стандартные шрифты для PDF, в которые они не встроены
+const pdfOut = path.join(root, 'public', 'pdfjs');
+for (const dir of ['cmaps', 'standard_fonts']) {
+  const src = path.join(nm, 'pdfjs-dist', dir);
+  if (!fs.existsSync(src)) continue;
+  fs.mkdirSync(path.join(pdfOut, dir), { recursive: true });
+  for (const f of fs.readdirSync(src)) fs.copyFileSync(path.join(src, f), path.join(pdfOut, dir, f));
+}
+console.log('Ресурсы PDF готовы: public/pdfjs');
