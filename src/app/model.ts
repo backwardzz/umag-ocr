@@ -206,13 +206,20 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
  * в файл для UMAG попадёт название как в магазине. Название из накладной сохраняется
  * в invoiceName (по нему идёт поиск). Название, исправленное вручную, не трогаем.
  * Если штрихкода в базе больше нет (каталог очищен, штрихкод изменён) — возвращаем название из накладной.
+ * Здесь же штрихкод, записанный у товара UMAG дополнительным («Доп. код»), заменяется основным.
  */
 export function applyCatalogNames(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc {
   let changed = false;
   const items = doc.items.map((src) => {
-    const found = src.barcode && catalog?.size ? catalog.get(src.barcode) : undefined;
+    // штрихкод строки, как он пришёл (из накладной, справочника, вручную), — до замены на основной
+    const own = src.altBarcode ?? src.barcode;
+    const found = own && catalog?.size ? catalog.get(own) : undefined;
     // товар UMAG строки — по нему в файле складываются разные штрихкоды одного товара
     let it = src.catalogBarcode === found?.barcode ? src : { ...src, catalogBarcode: found?.barcode };
+    // Штрихкод строки записан у товара дополнительным («Доп. код») — в приёмку идёт основной штрихкод товара
+    const barcode = found?.barcode ?? own;
+    const altBarcode = found && found.barcode !== own ? own : undefined;
+    if (it.barcode !== barcode || it.altBarcode !== altBarcode) it = { ...it, barcode, altBarcode };
     // единица не прочитана в накладной — берём единицу товара в UMAG («литр» там пишут полностью)
     if (!it.unit && found?.unit) it = { ...it, unit: found.unit === 'литр' ? 'л' : found.unit };
     if (it !== src) changed = true;
@@ -336,6 +343,8 @@ export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedIte
   }
   if ('barcode' in patch) {
     next.barcodeSource = patch.barcode ? 'manual' : undefined;
+    // введён новый штрихкод — прежняя замена «доп. код → основной» к нему не относится
+    next.altBarcode = undefined;
     // другой штрихкод — проверку нужно повторить
     if (patch.barcode !== it.barcode && !('approved' in patch)) next.approved = undefined;
     next.catalogMatch = undefined;

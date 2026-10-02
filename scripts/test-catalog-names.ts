@@ -107,5 +107,23 @@ check(fl[1][0] === '4680167313029' && fl[2][0] === '4607010743475', 'одина�
 const noCat = buildRows(applyCatalogNames(enrichDoc(flavors, {}, catalog), undefined), DEFAULT_EXPORT);
 check(noCat.length === 5, 'каталог очищен — каждая строка отдельно');
 
+console.log('Доп. код товара UMAG (колонка D) → основной штрихкод (колонка B)');
+{
+  const d0: ParsedDoc = { ...doc, items: [
+    item({ name: 'Боржоми Энерджи вишня', barcode: '4860019003647', barcodeSource: 'invoice' }),
+    item({ name: 'Боржоми Энерджи', barcode: '4860019003623', barcodeSource: 'invoice' }),
+  ] };
+  const d1 = applyCatalogNames(d0, catalog);
+  check(d1.items[0].barcode === '4860019003623' && d1.items[0].altBarcode === '4860019003647', 'доп. код из накладной заменён основным, исходный сохранён');
+  check(d1.items[1].barcode === '4860019003623' && d1.items[1].altBarcode === undefined, 'основной штрихкод не трогается');
+  check(applyCatalogNames(d1, catalog) === d1, 'повторное применение ничего не меняет');
+  const rows = buildRows(d1, { ...DEFAULT_EXPORT, header: false });
+  check(rows.length === 1 && rows[0][0] === '4860019003623' && rows[0][1] === 20, `в файле одна строка с основным штрихкодом: ${JSON.stringify(rows[0])}`);
+  const typed = applyCatalogNames({ ...d0, items: [patchItem(d0.items[1], { barcode: '4860019003685' })] }, catalog);
+  check(typed.items[0].barcode === '4860019003623' && typed.items[0].altBarcode === '4860019003685', 'доп. код, введённый вручную, тоже заменяется');
+  const cleared = applyCatalogNames(d1, undefined);
+  check(cleared.items[0].barcode === '4860019003647' && cleared.items[0].altBarcode === undefined, 'каталог очищен — возвращается штрихкод из накладной');
+}
+
 console.log(fails ? `\nОшибок: ${fails}` : '\nНазвания из каталога: все проверки пройдены');
 process.exit(fails ? 1 : 0);

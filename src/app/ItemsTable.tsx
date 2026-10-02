@@ -166,6 +166,11 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                   <div className="cell-sub">
                     {it.code && it.code !== it.barcode && <span>код {it.code}{it.codeAlt && !it.barcode ? ` / ${it.codeAlt}` : ''}</span>}
                     {it.barcodeSource === 'mapping' && <span className="tag">из справочника</span>}
+                    {it.altBarcode && (
+                      <span className="tag" title={`В накладной штрихкод ${it.altBarcode} — в UMAG он записан у товара дополнительным («Доп. код»), в файл идёт основной штрихкод товара`}>
+                        доп. код {it.altBarcode} → основной
+                      </span>
+                    )}
                     {it.barcodeSource === 'catalog' && (
                       <>
                         {it.catalogMatch?.by === 'fix' ? (
