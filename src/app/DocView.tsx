@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
 import type { ParsedDoc, ParsedItem } from '../core/types';
 import { buildRows, exportFileName, mergedLineCount, toTsv, toXlsxBlob, toReportBlob, type ExportSettings } from '../core/export';
-import { approveAll, summarize, money, type BulkOp, type DocEntry } from './model';
+import { approveAll, summarize, money, qtyFmt, type BulkOp, type DocEntry } from './model';
 import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
@@ -117,6 +117,13 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   const rows = buildRows(doc, settings);
   const dataRows = rows.length - (settings.header ? 1 : 0);
   const merged = mergedLineCount(doc);
+  // Общее количество по единицам (как в таблице) и сверка с «Итого» накладной — там количество до пересчёта единиц
+  const byUnit = new Map<string, number>();
+  for (const it of doc.items) if (it.qty !== undefined) byUnit.set(it.unit ?? '', (byUnit.get(it.unit ?? '') ?? 0) + it.qty);
+  const qtyTotals = [...byUnit].map(([unit, qty]) => ({ unit, qty: Math.round(qty * 1000) / 1000 }));
+  const origQty = Math.round(doc.items.reduce((a, it) => a + ((it.orig ? it.orig.qty : it.qty) ?? 0), 0) * 1000) / 1000;
+  const invoiceQty = doc.totals?.qty;
+  const qtyOk = invoiceQty !== undefined && Math.abs(invoiceQty - origQty) < 0.0005;
 
   const download = () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего выгружать'); return; }
@@ -162,14 +169,6 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
       </div>
 
       <div className="summary">
-        <span className={`chip ${s.totalsOk === false ? 'chip--err' : s.totalsOk ? 'chip--ok' : 'chip--warn'}`}>
-          {s.totalsOk ? <IconCheck /> : <IconAlert />}
-          {s.total === undefined
-            ? `Итог не прочитан · по строкам ${money(s.sum)} ₸`
-            : s.totalsOk
-              ? `Сходится с итогом: ${money(s.total)} ₸`
-              : `По строкам ${money(s.sum)} ₸, в накладной ${money(s.total)} ₸`}
-        </span>
         <span className="chip">{s.rows} поз.</span>
         {s.errors > 0 && <span className="chip chip--err">{s.errors} с ошибками</span>}
         {s.warnings > 0 && <span className="chip chip--warn">{s.warnings} проверить</span>}
@@ -207,6 +206,24 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           <ItemsTable items={doc.items} catalog={catalog} onChange={(i, patch) => { setUndo(undefined); onItemChange(i, patch); }} onRemove={onItemRemove} onAdd={onItemAdd}
             selected={selected} onToggle={toggle} onToggleAll={(on) => setSelected(new Set(on ? doc.items.map((_, i) => i) : []))}
             onScale={(i, field, factor) => bulk([i], { kind: 'scale', field, factor })} />
+          <div className="totals-bar">
+            <span className="totals-bar__qty" title="Сумма количеств по всем строкам — как они попадут в файл для UMAG">
+              Всего: <b>{qtyTotals.map((t) => `${qtyFmt(t.qty)}${t.unit ? ` ${t.unit}` : ''}`).join(' · ') || '0'}</b>
+              {invoiceQty !== undefined && (
+                <span className={qtyOk ? 'totals-bar__ok' : 'totals-bar__bad'}>
+                  {qtyOk ? ' · как в накладной' : ` · в «Итого» накладной прочитано ${qtyFmt(invoiceQty)}, по строкам ${qtyFmt(origQty)} — сверьте`}
+                </span>
+              )}
+            </span>
+            <span className={`chip ${s.totalsOk === false ? 'chip--err' : s.totalsOk ? 'chip--ok' : 'chip--warn'}`}>
+              {s.totalsOk ? <IconCheck /> : <IconAlert />}
+              {s.total === undefined
+                ? `Итог не прочитан · по строкам ${money(s.sum)} ₸`
+                : s.totalsOk
+                  ? `Сходится с итогом: ${money(s.total)} ₸`
+                  : `По строкам ${money(s.sum)} ₸, в накладной ${money(s.total)} ₸`}
+            </span>
+          </div>
           {autofilled > 0 && (
             <p className="autofill-note">
               <IconAlert /> Штрихкоды в {autofilled} {plural(autofilled, 'строке', 'строках', 'строках')} заполнены или исправлены автоматически

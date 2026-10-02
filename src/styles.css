@@ -450,3 +450,13 @@ button, input { font: inherit; color: inherit; }
 /* «Всё верно»: снять предупреждения со всех жёлтых строк */
 .chip--btn { cursor: pointer; font: inherit; font-size: inherit; color: var(--text); background: var(--surface); }
 .chip--btn:hover { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+/* Итоги под таблицей: общее количество и сверка с итогом накладной */
+.totals-bar {
+  display: flex; gap: 8px 14px; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface-2);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.totals-bar__qty { font-size: 14px; }
+.totals-bar__qty b { font-size: 15px; }
+.totals-bar__ok { color: var(--ok); }
+.totals-bar__bad { color: var(--warn); }
