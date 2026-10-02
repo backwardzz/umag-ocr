@@ -1,8 +1,8 @@
 /**
  * Выгрузка для UMAG. Импорт в «Приёмке» (Закупки → Приёмка → «📥 Импорт товаров»)
  * принимает файл или вставку столбцов через Ctrl+V; назначение каждого столбца
- * выбирается в выпадающем списке над ним, для 4 столбцов по умолчанию:
- * Штрихкод, Количество, Название, Ед. изм. Поэтому выгружаем в том же порядке —
+ * выбирается в выпадающем списке над ним. Выгружаем 5 столбцов:
+ * Штрихкод, Количество, Название, Ед. изм, Цена приходная (за единицу, с НДС) —
  * и без строки заголовка (иначе UMAG примет её за товар).
  */
 import * as XLSX from 'xlsx';
@@ -14,7 +14,7 @@ export type ExportColumn = 'barcode' | 'qty' | 'price' | 'name' | 'sum' | 'code'
 export const COLUMN_LABELS: Record<ExportColumn, string> = {
   barcode: 'Штрихкод',
   qty: 'Количество',
-  price: 'Цена закупки',
+  price: 'Цена приходная',
   name: 'Название',
   sum: 'Сумма',
   code: 'Код поставщика',
@@ -36,7 +36,7 @@ export interface UnitRule { from: string; to: string; factor: number }
 export const DEFAULT_UNIT_RULES: UnitRule[] = [{ from: 'блок', to: 'шт', factor: 10 }];
 
 export const DEFAULT_EXPORT: ExportSettings = {
-  columns: ['barcode', 'qty', 'name', 'unit'],
+  columns: ['barcode', 'qty', 'name', 'unit', 'price'],
   header: false,
   qtyMode: 'pcs',
   unitRules: DEFAULT_UNIT_RULES,

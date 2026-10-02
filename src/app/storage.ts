@@ -2,15 +2,15 @@ import { DEFAULT_EXPORT, type ExportSettings, type ExportColumn } from '../core/
 
 const KEY = 'umag-ocr.settings.v1';
 const ALL: ExportColumn[] = ['barcode', 'qty', 'name', 'unit', 'price', 'sum', 'code'];
-/** Прежний набор по умолчанию: сохранённые с ним настройки переводим на новый */
-const OLD_DEFAULT = 'barcode,qty,price';
+/** Прежние наборы по умолчанию: сохранённые с ними настройки переводим на новый (пятый столбец — цена приходная) */
+const OLD_DEFAULTS = ['barcode,qty,price', 'barcode,qty,name,unit'];
 
 export function loadSettings(): ExportSettings {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_EXPORT;
     const s = JSON.parse(raw) as Partial<ExportSettings>;
-    const saved = s.columns?.join(',') === OLD_DEFAULT ? undefined : s.columns;
+    const saved = OLD_DEFAULTS.includes(s.columns?.join(',') ?? '') ? undefined : s.columns;
     const columns = (saved ?? DEFAULT_EXPORT.columns).filter((c) => ALL.includes(c));
     return {
       columns: columns.length ? columns : DEFAULT_EXPORT.columns,

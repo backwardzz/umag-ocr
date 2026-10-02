@@ -31,7 +31,7 @@ const catalog = fs.existsSync(catalogFile) ? new CatalogIndex(parseCatalogData(f
 /** Excel для UMAG: штрихкод, название и единица — текстом, количество и цена — числами */
 async function checkExcel(doc: ParsedDoc): Promise<string[]> {
   const withCodes: ParsedDoc = { ...doc, items: doc.items.map((it, i) => ({ ...it, barcode: it.barcode ?? `20000000${String(i).padStart(5, '0')}` })) };
-  const columns: ExportColumn[] = [...DEFAULT_EXPORT.columns, 'price'];
+  const columns: ExportColumn[] = DEFAULT_EXPORT.columns;
   const rows = buildRows(withCodes, { ...DEFAULT_EXPORT, columns });
   const wb = XLSX.read(Buffer.from(await toXlsxBlob(rows, columns).arrayBuffer()));
   const ws = wb.Sheets[wb.SheetNames[0]];
