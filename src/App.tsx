@@ -6,7 +6,7 @@ import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core
 import { toReportBlob, type ExportSettings } from './core/export';
 import { issue, sourceName, type ParsedDoc, type ParsedItem } from './core/types';
 import {
-  applyCatalog, applyCatalogNames, applyMapping, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, mergePages, newItem, patchItem, ruleFor,
+  applyCatalog, applyCatalogNames, applyMapping, fillBarcodeByName, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, mergePages, newItem, patchItem, ruleFor,
   type BulkOp, type DocEntry,
 } from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
@@ -171,7 +171,15 @@ export default function App() {
     const doc = current.doc;
     const item = doc.items[index];
     // Новый штрихкод есть в каталоге — название сразу подтягивается из него
-    changeDoc(current.id, (d) => applyCatalogNames({ ...d, items: d.items.map((it, i) => (i === index ? patchItem(it, patch) : it)) }, catalogRef.current));
+    // Ввели название у строки без штрихкода (например, добавленной вручную) — штрихкод ищется в каталоге по названию
+    changeDoc(current.id, (d) => applyCatalogNames({
+      ...d,
+      items: d.items.map((it, i) => {
+        if (i !== index) return it;
+        const next = patchItem(it, patch);
+        return 'name' in patch ? fillBarcodeByName(next, d, catalogRef.current) : next;
+      }),
+    }, catalogRef.current));
     // Штрихкод для кода поставщика (или названия, если кодов нет) — запоминаем
     // и подставляем в другие открытые накладные
     const code = itemMapCode(item);

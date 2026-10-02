@@ -8,7 +8,7 @@
 import { CatalogIndex, type CatalogItem } from '../src/core/catalog';
 import { itemMapCode } from '../src/core/mapping';
 import type { ParsedDoc, ParsedItem } from '../src/core/types';
-import { applyCatalog, applyCatalogNames, enrichDoc, patchItem } from '../src/app/model';
+import { applyCatalog, applyCatalogNames, enrichDoc, fillBarcodeByName, newItem, patchItem } from '../src/app/model';
 import { isValidEan } from '../src/core/numbers';
 import { buildRows, DEFAULT_EXPORT } from '../src/core/export';
 
@@ -123,6 +123,21 @@ console.log('Доп. код товара UMAG (колонка D) → основ�
   check(typed.items[0].barcode === '4860019003623' && typed.items[0].altBarcode === '4860019003685', 'доп. код, введённый вручную, тоже заменяется');
   const cleared = applyCatalogNames(d1, undefined);
   check(cleared.items[0].barcode === '4860019003647' && cleared.items[0].altBarcode === undefined, 'каталог очищен — возвращается штрихкод из накладной');
+}
+
+console.log('Новая строка: ввели название — штрихкод из каталога');
+{
+  const typed = (it: ParsedItem, name: string) => applyCatalogNames({ ...doc, items: [fillBarcodeByName(patchItem(it, { name }), doc, catalog)] }, catalog).items[0];
+  const a = typed(newItem(1), 'чупа чупс ассорти 12г');
+  check(a.barcode === '8410031000000' && a.barcodeSource === 'catalog', `штрихкод подобран по введённому названию: ${a.barcode}`);
+  check(a.name === 'Chupa Chups ассорти 12г' && a.invoiceName === 'чупа чупс ассорти 12г', 'название — из каталога, введённое сохранено');
+  const b = typed(a, 'Сигареты Camel Aroma Red');
+  check(b.barcode === '4600000000011' && b.name === 'Сигареты Camel Aroma Red', 'название изменили — штрихкод подобран заново');
+  const c = typed(b, 'товар которого нет в базе');
+  check(c.barcode === undefined && c.name === 'товар которого нет в базе', 'не нашлось — прежнее автозаполнение снято, название как ввели');
+  const manual = patchItem(newItem(1), { barcode: '4870000000000' });
+  check(typed(manual, 'чупа чупс ассорти 12г').barcode === '4870000000000', 'штрихкод, введённый вручную, не заменяется');
+  check(fillBarcodeByName(patchItem(newItem(1), { name: 'чупа чупс ассорти 12г' }), doc, undefined).barcode === undefined, 'без каталога ничего не подставляется');
 }
 
 console.log(fails ? `\nОшибок: ${fails}` : '\nНазвания из каталога: все проверки пройдены');

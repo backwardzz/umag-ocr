@@ -199,7 +199,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                       {it.nameSource === 'catalog' && (
                         <span className="tag" title="Название взято из каталога UMAG по штрихкоду — так оно попадёт в файл">из базы</span>
                       )}
-                      <span className="cell-sub__orig" title="Название, как оно напечатано в накладной">в накладной: {it.invoiceName}</span>
+                      <span className="cell-sub__orig" title="Название, как оно напечатано в накладной или введено вручную, — по нему найден товар">{it.added ? 'введено' : 'в накладной'}: {it.invoiceName}</span>
                     </div>
                   )}
                   {shown.length > 0 && (

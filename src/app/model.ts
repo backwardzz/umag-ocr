@@ -201,6 +201,26 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
 }
 
 /**
+ * Название строки ввели или исправили вручную, а штрихкода у неё нет (новая строка, строка без кода):
+ * ищем товар в каталоге UMAG по этому названию и подставляем его штрихкод — как автозаполнение
+ * при загрузке накладной (строка помечается «автозаполнение», название берётся из каталога).
+ * Штрихкод из накладной, справочника или введённый вручную не трогаем. Не нашлось — прежнее
+ * автозаполнение снимается: оно было подобрано под другое название.
+ */
+export function fillBarcodeByName(it: ParsedItem, doc: ParsedDoc, catalog?: CatalogIndex): ParsedItem {
+  if (!catalog?.size || !it.name.trim()) return it;
+  if (it.barcode && it.barcodeSource !== 'catalog') return it;
+  if (it.catalogMatch?.by === 'fix') return it;
+  const m = catalog.match({ name: it.name, unit: it.unit, supplier: doc.supplier, codes: [...(it.extraCodes ?? []), ...(it.code ? [it.code] : [])] });
+  if (!m) return it.barcode ? { ...it, barcode: undefined, barcodeSource: undefined, catalogMatch: undefined, altBarcode: undefined, catalogBarcode: undefined, approved: undefined } : it;
+  return {
+    ...it, barcode: m.item.barcode, barcodeSource: 'catalog', catalogMatch: { name: m.item.name, by: m.by }, altBarcode: undefined, approved: undefined,
+    // введённое название — как «название из накладной»: по нему шёл поиск; в строке покажется название из каталога
+    invoiceName: it.name, nameSource: undefined,
+  };
+}
+
+/**
  * Названия из каталога UMAG: если штрихкод строки есть в загруженной базе (из накладной,
  * из справочника, подобран по названию или введён вручную), название берём из базы —
  * в файл для UMAG попадёт название как в магазине. Название из накладной сохраняется
@@ -355,7 +375,7 @@ export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedIte
 }
 
 export function newItem(n: number): ParsedItem {
-  return { n, name: '', issues: [], edited: true };
+  return { n, name: '', issues: [], edited: true, added: true };
 }
 
 /** Единицы для подсказок в полях «Ед. изм» */
