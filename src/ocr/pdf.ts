@@ -12,7 +12,7 @@ export const MAX_PDF_PAGES = 30;
 export const isPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
 
 /**
- * Длинная сторона картинки-скана в пикселях, если страница состоит из одной картинки
+ * Длинная сторона картинки-скана в пикселях, если страница состоит из одной большой картинки
  * (текста на странице при этом может не быть вовсе или это невидимый слой распознавания).
  */
 async function scanImageSide(page: { getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[] }> }, paintImage: number): Promise<number | undefined> {
@@ -21,7 +21,9 @@ async function scanImageSide(page: { getOperatorList(): Promise<{ fnArray: numbe
     .map((fn, i) => (fn === paintImage ? (ops.argsArray[i] as unknown[]) : undefined))
     .filter((a): a is unknown[] => !!a && typeof a[1] === 'number' && typeof a[2] === 'number')
     .map((a) => Math.max(a[1] as number, a[2] as number));
-  return images.length === 1 && images[0] >= 800 ? images[0] : undefined;
+  // рядом со сканом бывает мелкая картинка — значок приложения-сканера (CamScanner), QR-код
+  const [big, next = 0] = images.sort((a, b) => b - a);
+  return big >= 800 && next * 3 <= big ? big : undefined;
 }
 
 export async function pdfToPages(file: File): Promise<File[]> {

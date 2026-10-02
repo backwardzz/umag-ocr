@@ -44,9 +44,37 @@ function chooseFormat(page: OcrPage): FormatChoice {
   // потом таблицу без кодов.
   const unknown = !/ОТПУСК\s+ЗАПАСОВ|З-2|3-2/i.test(text);
   const eanOpts: Z2Options = { code: 'ean', nameDir: 'nearest' };
-  if (parseZ2(page, eanOpts).items.length >= 2) return { kind: 'z2', opts: eanOpts, unknown };
-  if (parseZ2(page, GENERIC_Z2).items.length >= 2) return { kind: 'z2', opts: GENERIC_Z2, unknown };
+  if (parseZ2(page, eanOpts).items.length >= 2) return { kind: 'z2', opts: bestLayout(page, eanOpts), unknown };
+  if (parseZ2(page, GENERIC_Z2).items.length >= 2) return { kind: 'z2', opts: bestLayout(page, GENERIC_Z2), unknown };
   return { kind: 'z2', opts: { code: 'none', nameDir: 'nearest' }, unknown };
+}
+
+/**
+ * Неизвестный поставщик: где в строке стоят числа относительно кода — на той же линии,
+ * ниже (код у верхнего края многострочной строки) или выше. Если угадать неверно, числа съезжают
+ * на соседнюю строку, и это видно только по итогу. Выбираем раскладку, при которой больше строк
+ * сходится по арифметике, а сумма строк равна итогу. Считаем по первому проходу OCR (без полос
+ * второго прохода) — так план полос и разбор выбирают одно и то же.
+ */
+function bestLayout(page: OcrPage, base: Z2Options): Z2Options {
+  const first: OcrPage = { ...page, strips: undefined };
+  const variants: Z2Options[] = [
+    base,
+    { ...base, rowAlign: 'top', nameDir: 'down' },
+    { ...base, rowAlign: 'bottom', nameDir: 'up' },
+  ];
+  let best = base, bestScore = -1;
+  for (const opts of variants) {
+    const doc = parseZ2(first, opts);
+    const solved = doc.items.filter((it) => (it.readings?.support ?? 0) >= 3).length;
+    const rows = round2(doc.items.reduce((a, it) => a + (it.sum ?? 0), 0));
+    const totalOk = doc.totals?.sum !== undefined && near(doc.totals.sum, rows, 0.05 + doc.items.length * 0.01);
+    // совпадение с итогом весит больше любой разницы в числе сошедшихся строк
+    const score = solved + (totalOk ? doc.items.length + 1 : 0);
+    // при равенстве остаётся обычная раскладка (она первая)
+    if (score > bestScore) { best = opts; bestScore = score; }
+  }
+  return best;
 }
 
 /** Что распознать вторым проходом (узкие полосы столбцов) */

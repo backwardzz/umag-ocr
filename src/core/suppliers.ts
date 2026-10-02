@@ -87,7 +87,8 @@ export const SUPPLIERS: SupplierDef[] = [
     goods: 'Ferrero, Kinder, Bonduelle',
     name: 'ТОО "Прима Дистрибьюшн"',
     bins: ['081241007741'],
-    keywords: [/Прима\s*Дистр/i, /prima-group/i],
+    // скан без шапки (обрезан сверху): узнаём по столбцам «Артикул · Штрих код материала · Код ТНВЭД»
+    keywords: [/Прима\s*Дистр/i, /prima-group/i, /Артикул\s+код\s+материала\s+\S{2,4}\s+ТНВЭД/i],
     parser: 'z2',
     z2: { code: 'ean', nameDir: 'down', rowAlign: 'top' },
   },
