@@ -2,7 +2,8 @@
  * Пересчёт единиц (1 блок = 10 шт) и массовые правки строк — без OCR, на искусственных данных.
  *   npx tsx scripts/test-units.ts
  */
-import { applyUnitRules, bulkEdit } from '../src/app/model';
+import { allIssues, applyUnitRules, approveAll, bulkEdit, patchItem, worstLevel } from '../src/app/model';
+import { issue } from '../src/core/types';
 import { buildRows, DEFAULT_EXPORT, DEFAULT_UNIT_RULES, type ExportSettings } from '../src/core/export';
 import type { ParsedDoc, ParsedItem } from '../src/core/types';
 
@@ -57,6 +58,21 @@ check(restored[0].qty === 1 && restored[0].unit === 'блок' && restored[0].pr
 check(restored[2] === d.items[2], 'строка без правок не меняется');
 const packs = bulkEdit([item({ qty: 72, unit: 'шт', price: 10, sum: 720, pack: { count: 3, size: 24 } })], [0], { kind: 'scale', field: 'qty', factor: 2 });
 check(packs[0].pack?.count === 6, 'упаковки «N x M» следуют за количеством');
+
+console.log('Проверено: снять предупреждения');
+// штрихкод с неверной контрольной цифрой — предупреждение; «не удалось прочитать количество» — ошибка разбора
+const warnRow = item({ name: 'Айран', barcode: '4870132003258', qty: 3, price: 650, sum: 1950, barcodeSource: 'manual' });
+const errRow = item({ name: 'Кефир', barcode: '4870132003258', qty: 3, price: 650, sum: 1950, barcodeSource: 'manual', issues: [issue('error', 'Не удалось прочитать количество')] });
+const lvl = (it: ParsedItem) => worstLevel(allIssues(it));
+check(lvl(warnRow) === 'warn', 'строка с предупреждением — жёлтая');
+const ok1 = patchItem(warnRow, { approved: true });
+check(lvl(ok1) === 'ok' && !ok1.edited, '«Проверено»: строка больше не жёлтая, правкой не считается');
+check(lvl(patchItem(ok1, { approved: false })) === 'warn', '«вернуть замечания» возвращает предупреждение');
+check(lvl(patchItem(errRow, { approved: true })) === 'error', 'ошибка разбора после «Проверено» остаётся');
+check(lvl(patchItem(ok1, { barcode: '4870132003259' })) === 'warn', 'новый штрихкод — проверка сбрасывается');
+const clean = item({ name: 'Айран', barcode: '4870132003257', qty: 3, price: 650, sum: 1950, barcodeSource: 'invoice' });
+const all = approveAll([warnRow, errRow, clean]);
+check(all[0].approved === true && all[1].approved === true && all[2] === clean, '«Проверено всё» отмечает только строки с предупреждениями');
 
 console.log(fails ? `\nОшибок: ${fails}` : '\nЕдиницы и массовые правки: все проверки пройдены');
 process.exit(fails ? 1 : 0);

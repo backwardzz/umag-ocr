@@ -202,6 +202,21 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                       {shown.map((x, k) => <li key={k} className={`row-issue row-issue--${x.level}`}>{x.text}</li>)}
                     </ul>
                   )}
+                  {shown.some((x) => x.level === 'warn') && (
+                    <button type="button" className="approve" title="Строка сверена с накладной — снять предупреждение"
+                      // автозаполненный штрихкод заодно запоминается в справочнике, как по кнопке «верно»
+                      onClick={() => onChange(i, it.barcodeSource === 'catalog' ? { barcode: it.barcode, approved: true } : { approved: true })}>
+                      <IconCheck /> Проверено
+                    </button>
+                  )}
+                  {it.approved && (
+                    <div className="cell-sub">
+                      <button type="button" className="tag tag--btn" title="Вернуть предупреждения этой строки"
+                        onClick={() => onChange(i, { approved: false })}>
+                        проверено · вернуть замечания
+                      </button>
+                    </div>
+                  )}
                 </td>
                 <td className="c-num c-qty" data-label="Кол-во">
                   <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} onScale={(f) => onScale(i, 'qty', f)} />

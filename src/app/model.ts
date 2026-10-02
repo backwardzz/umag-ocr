@@ -268,8 +268,18 @@ export function allIssues(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
   const parsed = (it.edited ? [] : it.barcodeSource === 'invoice' ? it.issues : it.issues.filter((x) => x.kind !== 'ean'))
     // «не прочитано наименование» неактуально, если название есть (например, из каталога UMAG)
     .filter((x) => !(x.kind === 'noname' && it.name.trim()));
-  return [...itemProblems(it, catalog), ...parsed];
+  const all = [...itemProblems(it, catalog), ...parsed];
+  // строка проверена пользователем — предупреждения сняты (ошибки и «нет штрихкода» остаются)
+  return it.approved ? all.filter((x) => x.level !== 'warn') : all;
 }
+
+/** Есть ли у строки предупреждения, которые можно снять кнопкой «Проверено» */
+export const hasWarnings = (it: ParsedItem, catalog?: CatalogIndex) =>
+  !it.approved && allIssues(it, catalog).some((x) => x.level === 'warn');
+
+/** «Проверено» для всех строк с предупреждениями */
+export const approveAll = (items: ParsedItem[], catalog?: CatalogIndex): ParsedItem[] =>
+  items.map((it) => (hasWarnings(it, catalog) ? { ...it, approved: true } : it));
 
 export type RowLevel = 'error' | 'warn' | 'todo' | 'ok';
 
@@ -312,7 +322,9 @@ export function summarize(doc: ParsedDoc, catalog?: CatalogIndex): DocSummary {
 
 /** Правка строки: пересчитываем сумму, помечаем как проверенную пользователем */
 export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedItem {
-  const next: ParsedItem = { ...it, ...patch, edited: true };
+  // отметка «проверено» — не правка: замечания разбора об ошибках остаются
+  const onlyApproval = Object.keys(patch).length === 1 && 'approved' in patch;
+  const next: ParsedItem = { ...it, ...patch, edited: onlyApproval ? it.edited : true };
   if ('name' in patch) {
     // исправили вручную — больше не заменяем названием из каталога; исходное из накладной сохраняем для поиска
     next.nameSource = 'manual';
@@ -324,6 +336,8 @@ export function patchItem(it: ParsedItem, patch: Partial<ParsedItem>): ParsedIte
   }
   if ('barcode' in patch) {
     next.barcodeSource = patch.barcode ? 'manual' : undefined;
+    // другой штрихкод — проверку нужно повторить
+    if (patch.barcode !== it.barcode && !('approved' in patch)) next.approved = undefined;
     next.catalogMatch = undefined;
     // другой товар — название снова берётся из каталога (applyCatalogNames)
     if (patch.barcode !== it.barcode && next.nameSource === 'manual') next.nameSource = undefined;

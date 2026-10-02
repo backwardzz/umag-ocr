@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
 import type { ParsedDoc, ParsedItem } from '../core/types';
 import { buildRows, exportFileName, mergedLineCount, toTsv, toXlsxBlob, toReportBlob, type ExportSettings } from '../core/export';
-import { summarize, money, type BulkOp, type DocEntry } from './model';
+import { approveAll, summarize, money, type BulkOp, type DocEntry } from './model';
 import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
@@ -173,6 +173,12 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
         <span className="chip">{s.rows} поз.</span>
         {s.errors > 0 && <span className="chip chip--err">{s.errors} с ошибками</span>}
         {s.warnings > 0 && <span className="chip chip--warn">{s.warnings} проверить</span>}
+        {s.warnings > 0 && (
+          <button type="button" className="chip chip--btn" title="Все жёлтые строки сверены с накладной — снять предупреждения"
+            onClick={() => onItemsReplace(approveAll(doc.items, catalog))}>
+            <IconCheck /> Проверено всё
+          </button>
+        )}
         <span className={`chip ${s.missingBarcode ? 'chip--warn' : ''}`}>
           В файл: {s.exportable} из {s.rows}{s.missingBarcode ? ` · ${s.missingBarcode} без штрихкода` : ''}
         </span>
