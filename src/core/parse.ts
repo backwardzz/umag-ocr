@@ -44,8 +44,10 @@ function chooseFormat(page: OcrPage): FormatChoice {
   // потом таблицу без кодов.
   const unknown = !/ОТПУСК\s+ЗАПАСОВ|З-2|3-2/i.test(text);
   const eanOpts: Z2Options = { code: 'ean', nameDir: 'nearest' };
-  if (parseZ2(page, eanOpts).items.length >= 2) return { kind: 'z2', opts: bestLayout(page, eanOpts), unknown };
-  if (parseZ2(page, GENERIC_Z2).items.length >= 2) return { kind: 'z2', opts: bestLayout(page, GENERIC_Z2), unknown };
+  // (одна строка — тоже накладная, если её количество, цена и сумма прочитаны и сходятся)
+  const enough = (doc: ParsedDoc) => doc.items.length >= 2 || (doc.items.length === 1 && (doc.items[0].readings?.support ?? 0) >= 3);
+  if (enough(parseZ2(page, eanOpts))) return { kind: 'z2', opts: bestLayout(page, eanOpts), unknown };
+  if (enough(parseZ2(page, GENERIC_Z2))) return { kind: 'z2', opts: bestLayout(page, GENERIC_Z2), unknown };
   return { kind: 'z2', opts: { code: 'none', nameDir: 'nearest' }, unknown };
 }
 
@@ -124,10 +126,15 @@ function addTextTotals(doc: ParsedDoc, page: OcrPage) {
       const toks = extractNumbers(fixDigits(page.lines[i - 1].text.replace(/[`'’‘"“”„°|\]\[‚]/g, ' ')));
       if (toks.length <= 2) for (const tok of toks) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
     }
+    // «…, на сумму 6 100 тенге» — сумма без копеек (итог жирным над ней OCR мог не прочитать)
+    const whole = l.text.match(/на\s+сумму\s+(\d[\d ]*\d)\s*(?:тенге|тг|kzt)/i);
+    if (whole) found.push(Number(whole[1].replace(/ /g, '')));
     // («ито”:» — так OCR читает жирное «ИТОГ:» без последней буквы)
     if (!/[иуй]тог|(?:^|\s)ито[^А-Яа-яA-Za-z]|всего|к\s*оплате|на\s+сумму/i.test(l.text)) return;
     for (const t of [l.text, page.lines[i + 1]?.text ?? '']) {
-      for (const tok of extractNumbers(fixDigits(t.replace(/[`'’‘"“”„°|\]\[]/g, ' ')))) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
+      // («21840-00» — копейки через дефис; у номера «30-0107804» после двух цифр идут ещё цифры)
+      const text = t.replace(/[`'’‘"“”„°|\]\[]/g, ' ').replace(/(\d)-(\d\d)(?!\d)/g, '$1,$2');
+      for (const tok of extractNumbers(fixDigits(text))) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
     }
   });
   if (!found.length) return;
@@ -148,6 +155,11 @@ function checkTotals(doc: ParsedDoc) {
   }
   let sum = round2(doc.items.reduce((a, it) => a + (it.sum ?? 0), 0));
   const tol = 0.05 + doc.items.length * 0.01;
+  // Итог без запятой («4520000» вместо «45 200,00»): в 100 раз больше суммы строк, а после деления — того же порядка
+  const t = doc.totals?.sum;
+  if (doc.totals && t !== undefined && Number.isInteger(t) && t % 100 === 0 && t >= sum * 50 && t / 100 >= sum * 0.5 && t / 100 <= sum * 2) {
+    doc.totals.sum = t / 100;
+  }
   if (doc.totals?.sum !== undefined && !near(doc.totals.sum, sum, tol)) {
     // Итог мог быть прочитан с ошибкой — есть второе прочтение, совпадающее со строками?
     const alt = doc.totals.sumAlt?.find((x) => near(x, sum, tol));

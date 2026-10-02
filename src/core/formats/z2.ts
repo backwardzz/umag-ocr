@@ -349,6 +349,20 @@ function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
   roles[si] = 'sum';
   const rowOk = (row: number[][]) => row[qi].some((q) => row[pi].some((p) => row[si].some((s) => sumMatches(s, q, p))));
   const good = rows.filter(rowOk);
+  // Две цены вместо цены и суммы («Цена» и «Цена со скидкой», а столбец «Сумма» обрезан на фото):
+  // тройка сходится только в строках с количеством 1, а при количестве 2 и больше «цена» и «сумма» всё равно равны.
+  // Тогда правый столбец — цена (со скидкой), а сумму посчитает сверка строки: количество × цена
+  const samePrice = (row: number[][]) => row[pi].some((p) => p > 0 && row[si].some((s) => near(p, s, 0.005)));
+  const onlyUnits = good.length > 0 && good.every((row) => row[qi].every((q) => q === 1));
+  // (количество «1 шт» и «2 шт» иногда попадает в два соседних столбца — смотрим все столбцы левее цены)
+  const bigQty = (row: number[][]) => row.slice(0, pi).some((col) => col.some((q) => q > 1 && Number.isInteger(q)));
+  const pricePair = rows.filter((row) => bigQty(row) && samePrice(row)).length;
+  if (onlyUnits && pricePair >= 1) {
+    roles[pi] = 'skip';
+    roles[si] = 'price';
+    for (const c of [qi - 1, qi + 1]) if (c >= 0 && c < pi) roles[c] = 'qtyPlan';
+    return roles;
+  }
   // НДС: правее суммы, v ≈ s × 16/116 (или 12/112 для старых накладных)
   let vatCol = -1, vatVotes = 0;
   for (let m = si + 1; m < nCols; m++) {
@@ -373,7 +387,10 @@ function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
  * stripCodes — коды из второго прохода: уточняют прочтение и добавляют пропущенные строки.
  */
 function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code: string }[] = []) {
-  const words = flattenWords(page);
+  // копейки через дефис («350-00») читаем как обычные «350,00»
+  const words = opts.dashDecimals
+    ? flattenWords(page).map((w) => ({ ...w, text: w.text.replace(/(\d)-(\d\d)(?!\d)/, '$1,$2') }))
+    : flattenWords(page);
   const lineH = typicalLineHeight(words, page);
   const cellGap = lineH * 0.7;
   let anchors = opts.code === 'none' ? findNumericAnchors(page, words, lineH) : findCodeAnchors(words, opts, lineH);
@@ -391,6 +408,15 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
       extra.push({ cy: s.cy, x0: ref.x0, x1: ref.x1, code: s.code, stripCode: s.code });
     });
     anchors = dedupeByY([...anchors, ...extra], lineH);
+  }
+  // Коды в шапке над таблицей («Покупатель: <36007568>» — восемь цифр, как EAN-8) — не строки товаров:
+  // всё, что выше заголовка столбца «Штрихкод», отбрасываем (если ниже него остаётся большая часть строк)
+  if (opts.code !== 'none') {
+    const header = words.filter((w) => /^штрих/i.test(w.text.replace(/[^A-Za-zА-Яа-яЁё]/g, ''))).sort((x, y) => x.cy - y.cy)[0];
+    if (header) {
+      const below = anchors.filter((x) => x.cy > header.cy + lineH * 0.3);
+      if (below.length && below.length >= anchors.length * 0.5) anchors = below;
+    }
   }
   if (opts.code !== 'none') anchors = fillMissingRows(page, anchors, lineH);
   const empty = {
@@ -451,7 +477,8 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     // Столбцы чисел: кластеры правого края числовых ячеек
     const numericCells = rowCells.flat().filter((c) => c.num);
     const clusters = cluster1d(numericCells.map((c) => c.x1), colTol)
-      .filter((c) => c.count >= Math.max(2, rows.length * 0.3))
+      // (накладная из одной строки: в каждом столбце одно число — роли столбцов всё равно определит арифметика)
+      .filter((c) => c.count >= (rows.length === 1 ? 1 : Math.max(2, rows.length * 0.3)))
       .sort((a, b) => a.center - b.center);
     const cols: ColX[] = clusters.map((c, ci) => {
       // слово-мусор с огромной рамкой (печать, линия) не должно раздвигать столбец
@@ -476,7 +503,8 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     const readAny = (t: string) => [...new Set([...readValues(t, 'qty'), ...readValues(t, 'price')])];
     const byCol = rowCells.map((cells) => cellsByColumn(cells, cols, colTol));
     const values = byCol.map((cs) => cs.map((c) => (c ? readAny(c.num!.num) : [])));
-    let roles = detectRoles(values, cols.length);
+    // Столбцы, которые арифметика не различает («Кол-во» и «Приз» у Градус компани), — заданы для поставщика явно
+    let roles = opts.columns && opts.columns.length === cols.length ? [...opts.columns] : detectRoles(values, cols.length);
     if (!roles) {
       const n = Math.min(5, cols.length);
       roles = cols.map((_, i) => (i < cols.length - n ? 'skip' : LEGACY_ROLES[5 - n + (i - (cols.length - n))]));
@@ -654,7 +682,9 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     return doc;
   }
   const usedRoles = roles.filter((r) => r !== 'skip') as Role[];
-  if (!usedRoles.includes('qty') || !usedRoles.includes('sum')) {
+  if (usedRoles.includes('qty') && usedRoles.includes('price') && !usedRoles.includes('sum')) {
+    doc.issues.push(issue('warn', 'Столбец «Сумма» на фото не прочитан (обрезан или в тени) — суммы строк посчитаны как количество × цена, сверьте с итогом'));
+  } else if (!usedRoles.includes('qty') || !usedRoles.includes('sum')) {
     doc.issues.push(issue('warn', `Не удалось определить столбцы количества и суммы — часть значений может отсутствовать`));
   }
 
@@ -730,6 +760,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     : undefined;
   if (opts.codeWrap) for (const anc of anchors) appendWrappedDigit(anc, words, lineH);
   const numsLeftEdge = cols.length ? Math.min(...cols.filter((_, ci) => roles[ci] !== 'skip').map((c) => c.x0)) : Infinity;
+  const numsRightEdge = cols.length ? Math.max(...cols.filter((_, ci) => roles[ci] !== 'skip').map((c) => c.x1)) : Infinity;
 
   anchors.forEach((anc, i) => {
     const cells = bandCells[i];
@@ -746,7 +777,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     const nameSrc = nameStripWords ? nameStripWords.filter((w) => w.cy > nb.top && w.cy <= nb.bottom) : bandWords;
     const inUnitCol = (w: Word) => !!a.unitCol && w.cx > a.unitCol.x0 - lineH * 0.4 && w.cx < a.unitCol.x1 + lineH * 0.4;
     const unitCells = makeCells(words.filter((w) => w.cy > numBands[i].top && w.cy <= numBands[i].bottom && (w.x1 < numsLeftEdge || inUnitCol(w))), cellGap)
-      .filter((c) => UNIT_CELL_RE.test(c.text.replace(JUNK_RE, '').trim()) && (opts.code === 'none' || opts.nameSide === 'right' || c.x0 > anc.x1));
+      .filter((c) => UNIT_CELL_RE.test(c.text.replace(JUNK_RE, '').trim()) && (opts.code === 'none' || opts.nameSide === 'right' || opts.unitBeforeCode || c.x0 > anc.x1));
     // ближайшая к столбцу количества (у Yupiter правее есть «Штук»: «1 шт.», а единица строки — «бут» в «Общее»)
     const qtyX = cols[colOf('qtyPlan')]?.center ?? cols[colOf('qty')]?.center;
     const unitCell = unitCells.sort((x, y) => (qtyX === undefined ? y.x1 - x.x1 : Math.abs(x.x0 - qtyX) - Math.abs(y.x0 - qtyX)))[0];
@@ -774,7 +805,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
         && !(UNIT_CELL_RE.test(w.text.replace(JUNK_RE, '').trim()) && w.x0 > anc.x1));
     } else {
       const right = Math.min(anc.x0 + half, articleX0 !== undefined ? articleX0 - lineH * 0.3 : Infinity);
-      nameWords = nameSrc.filter((w) => w.x1 <= right && w.x0 < codeX0);
+      nameWords = nameSrc.filter((w) => w.x1 <= right && w.x0 < codeX0 && !(opts.unitBeforeCode && unitWords.has(w)));
     }
     const name = cleanName(nameWords, lineH, opts.nameSide === 'inline', i + 1);
     // NTIN из строки («NTIN: 0200132903914» у Евразиан, столбец NTIN у Yupiter): в UMAG часть товаров
@@ -807,8 +838,9 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     const item: ParsedItem = {
       n: i + 1,
       code: anc.code || undefined,
-      name: stripTrailingQty(name, sol.qty, opts.code === 'none'),
-      unit,
+      // «уп(10 шт)» в отдельном столбце OCR делит на два слова — единица не находится, а «уп(10» уходит в название
+      name: stripTrailingQty(name, sol.qty, opts.code === 'none').replace(/\s+[уy][пn]\s*\(\s*10\b.*$/i, ''),
+      unit: unit ?? (/[уy][пn]\s*\(\s*10\s*(?:шт|wr|wt|ur)/i.test(wordsToText(bandWords, lineH)) ? 'блок' : undefined),
       qty: sol.qty,
       price: sol.price,
       sum: sol.sum,
@@ -821,9 +853,51 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     };
     if (opts.code !== 'none' && (anc.code || anc.stripCode)) applyCode(item, anc, opts);
     else if (opts.code !== 'none') item.issues.push(issue('warn', 'Код строки не прочитан — строка найдена по ценам, введите штрихкод по фото'));
+    // Штрихкод в последнем столбце, правее сумм (Градус компани): строки найдены по суммам, штрихкод берём из строки
+    if (opts.barcodeRight) {
+      const b = numBands[i];
+      const code = words.filter((w) => w.cy > b.top && w.cy <= b.bottom && w.x0 > numsRightEdge)
+        // (рамка таблицы «]» после штрихкода читается как лишняя «1» в конце)
+        .map((w) => fixDigits(w.text).replace(/\D/g, ''))
+        .map((d) => (isValidEan(d) ? d : d.length === 14 && isValidEan(d.slice(0, 13)) ? d.slice(0, 13) : undefined))
+        .find((d): d is string => !!d);
+      if (code) { item.barcode = code; item.barcodeSource = 'invoice'; }
+    }
+    // Призовая строка: «Кол-во 0, Приз 6» — товар бесплатный, в «Итого к оплате» не входит
+    if (opts.prizeRows) {
+      const pi = colOf('price');
+      const val = (ci: number) => (ci >= 0 ? readValues(rowCols[i][ci]?.num?.num, 'qty')[0] : undefined);
+      const ordered = val(pi - 2), prize = val(pi - 1);
+      if (pi >= 2 && ordered === 0 && prize !== undefined && prize > 0) {
+        item.qty = prize;
+        item.price = 0;
+        item.sum = 0;
+        item.vat = undefined;
+        item.alternatives = [];
+        item.issues = [issue('info', `Призовой товар: ${prize} бесплатно`)];
+      }
+    }
     if (!item.name) item.issues.push(issue('warn', 'Не прочитано наименование', 'noname'));
     doc.items.push(item);
   });
+
+  // Потерянная запятая: «1100000» вместо «11 000,00» в цене и сумме сразу (сверка строки при этом сходится).
+  // Если цена ровно в 100 раз больше, чем у остальных строк, а после деления попадает в их диапазон — делим
+  const prices = doc.items.map((it) => it.price).filter((p): p is number => p !== undefined && p > 0);
+  if (prices.length >= 3) {
+    for (const it of doc.items) {
+      if (it.price === undefined || it.sum === undefined || !Number.isInteger(it.price) || it.price % 100 !== 0) continue;
+      const others = prices.filter((p) => p !== it.price);
+      if (others.length < 2) continue;
+      const med = median(others);
+      const fixed = it.price / 100;
+      if (it.price >= med * 50 && fixed >= med * 0.3 && fixed <= med * 3) {
+        it.price = fixed;
+        it.sum = round2(it.sum / 100);
+        it.issues.push(issue('warn', 'Цена и сумма были прочитаны без запятой (в 100 раз больше, чем у соседних строк) — исправлено, сверьте'));
+      }
+    }
+  }
 
   if (opts.code === 'ean') repairByNeighbors(doc.items);
 
@@ -1043,7 +1117,8 @@ function cleanName(allWords: Word[], lineH: number, inlineCode = false, rowNo?: 
     .replace(/\s{2,}/g, ' ')
     .trim();
   // Строки заголовка таблицы попадают в первую строку — отрезаем
-  name = name.replace(/^.*?(Наименование,?\s*характеристика|по\s+порядку)\s*/i, '').replace(/^\d{1,2}\s+/, '');
+  name = name.replace(/^.*?(Наименование,?\s*(?:характеристика|товара)|по\s+порядку)\s*/i, '')
+    .replace(/^\W*Ед\.?\s*изм\.?\W*/i, '').replace(/^\d{1,2}\s+/, '');
   // № строки, слипшийся с названием: «10Водка» (цифры и сразу кириллица)
   name = name.replace(/^\d{1,2}(?=[А-ЯЁа-яё]{3})/, '');
   if (inlineCode) {
@@ -1107,6 +1182,8 @@ function applyCode(item: ParsedItem, anc: Anchor, opts: Z2Options) {
 
 export function normalizeUnit(t?: string): string | undefined {
   if (!t) return undefined;
+  // «уп(10 шт)» — блок сигарет: дальше сработает пересчёт «1 блок = 10 шт»
+  if (/[уy][пn]\D{0,3}10\D{0,3}(?:шт|wt|ur|um)/i.test(t)) return 'блок';
   // «бут» с «б», прочитанной как 6: «6yr», «6ут»
   if (/^\W*[6б][yу][tтr]\W*$/i.test(t.trim())) return 'бут';
   const s = t.toLowerCase().replace(/[^a-zа-яё]/g, '');

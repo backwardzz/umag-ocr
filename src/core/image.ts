@@ -509,6 +509,64 @@ export function removeLongLines(bin: Gray, minLenH: number, minLenV: number, max
   return { image: { w, h, d }, lines: { hMask, hBuckets, vMask, vBuckets } };
 }
 
+/**
+ * Пунктирные линии таблицы (узкие накладные с матричных и чековых принтеров). Сплошные линии убирает
+ * removeLongLines, а пунктир остаётся, и Tesseract принимает таблицу за картинку — строки пропадают целиком.
+ * Пунктир — длинная цепочка коротких чёрных отрезков с короткими промежутками; у текста такая цепочка
+ * рвётся на пробелах между словами и на широких штрихах букв.
+ */
+export function removeDottedLines(bin: Gray, charH: number, maxThick: number): Gray {
+  const { w, h } = bin;
+  const src = bin.d;
+  const d = new Uint8ClampedArray(src);
+  // штрих пунктира на фото — 5–8 px при высоте символа 24, промежуток — 4–9 px
+  const maxRun = Math.max(4, Math.round(charH * 0.4));
+  const maxGap = Math.max(5, Math.round(charH * 0.45));
+  // на таком расстоянии по обе стороны от линии пусто: линия стоит между строками текста,
+  // а цепочка коротких штрихов внутри строки текста окружена телами букв
+  const off = maxThick + 2;
+  const isBlack = (x: number, y: number) => src[y * w + x] === 0;
+  // along: длина строки/столбца, across: число строк/столбцов; at(i, j) — пиксель j-й линии в позиции i
+  const scan = (along: number, across: number, at: (i: number, j: number) => boolean, minLen: number, erase: (i: number, j: number) => void) => {
+    for (let j = 0; j < across; j++) {
+      // (без «полосы» ±1 px: соседние ряды точек, сложенные вместе, дают отрезки длиннее точки)
+      const on = (i: number) => at(i, j);
+      let start = -1, runs = 0, lastEnd = -1, i = 0;
+      const flush = (end: number) => {
+        let near = 0, n = 0;
+        if (start >= 0 && end - start >= minLen) {
+          for (let k = start; k < end; k += 2) {
+            n++;
+            if ((j - off >= 0 && at(k, j - off)) || (j + off < across && at(k, j + off))) near++;
+          }
+        }
+        if (start >= 0 && end - start >= minLen && runs >= (end - start) / (maxRun + maxGap + 2) && near <= n * 0.12) {
+          for (let k = start; k < end; k++) for (let dj = -1; dj <= 1; dj++) if (j + dj >= 0 && j + dj < across && at(k, j + dj)) erase(k, j + dj);
+        }
+        start = -1; runs = 0;
+      };
+      while (i < along) {
+        if (!on(i)) { i++; continue; }
+        let e = i;
+        while (e < along && on(e)) e++;
+        const len = e - i;
+        if (len > maxRun) { flush(lastEnd); }
+        else if (start >= 0 && i - lastEnd <= maxGap) { runs++; }
+        else { flush(lastEnd); start = i; runs = 1; }
+        lastEnd = len > maxRun ? -1 : e;
+        i = e;
+      }
+      flush(lastEnd);
+    }
+  };
+  // стираем только тонкое: буква, которую пересекает линия, остаётся
+  const thinV = (x: number, y: number) => { let a = y, b = y; while (a > 0 && isBlack(x, a - 1)) a--; while (b < h - 1 && isBlack(x, b + 1)) b++; return b - a + 1 <= maxThick; };
+  const thinH = (x: number, y: number) => { let a = x, b = x; while (a > 0 && isBlack(a - 1, y)) a--; while (b < w - 1 && isBlack(b + 1, y)) b++; return b - a + 1 <= maxThick; };
+  scan(w, h, (x, y) => isBlack(x, y), Math.round(charH * 12), (x, y) => { if (thinV(x, y)) d[y * w + x] = 255; });
+  scan(h, w, (y, x) => isBlack(x, y), Math.round(charH * 5), (y, x) => { if (thinH(x, y)) d[y * w + x] = 255; });
+  return { w, h, d };
+}
+
 /** Удаляем мелкий шум (связные компоненты из нескольких пикселей) */
 export function despeckle(bin: Gray, maxArea: number): Gray {
   const { w, h } = bin;
@@ -590,7 +648,7 @@ export function preprocess(rgba: ArrayLike<number>, w: number, h: number, opts: 
     // Горизонтальная линия должна быть длиннее любого слова/числа (штрихкод ≈ 10 высот символа),
     // иначе плотные ряды цифр принимаются за линии
     const r = removeLongLines(image, Math.round(outChar * 12), Math.round(outChar * 5), Math.max(3, Math.round(outChar * 0.28)));
-    image = r.image;
+    image = removeDottedLines(r.image, outChar, Math.max(3, Math.round(outChar * 0.28)));
     lines = r.lines;
   }
   image = despeckle(image, Math.max(3, Math.round(outChar * outChar * 0.015)));
