@@ -6,6 +6,7 @@ import { approveAll, summarize, money, qtyFmt, type BulkOp, type DocEntry } from
 import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
+import { saudaBase, saudaLink } from '../core/sauda';
 import { downloadBlob, copyText } from './storage';
 import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh, IconX } from './Icons';
 
@@ -129,6 +130,12 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего выгружать'); return; }
     downloadBlob(toXlsxBlob(rows, settings.columns), exportFileName(doc));
   };
+  const toSauda = () => {
+    if (!dataRows) { toast('Нет строк со штрихкодом — нечего отправлять'); return; }
+    let override: string | null = null;
+    try { override = localStorage.getItem('umag-ocr.saudaUrl'); } catch { /* приватный режим */ }
+    window.open(saudaLink(saudaBase(window.location, override), doc, settings), '_blank', 'noopener');
+  };
   const copy = async () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего копировать'); return; }
     const ok = await copyText(toTsv(rows));
@@ -155,7 +162,10 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           <div className="docview__format muted">{doc.formatName}</div>
         </div>
         <div className="actions">
-          <button type="button" className="btn btn--primary" onClick={download} title="Файл для «Приёмка → Импорт товаров» в UMAG">
+          <button type="button" className="btn btn--primary" onClick={toSauda} title="Открыть Sauda и создать из накладной черновик приёмки">
+            В Sauda
+          </button>
+          <button type="button" className="btn" onClick={download} title="Файл для «Приёмка → Импорт товаров» в UMAG">
             <IconDownload /> Excel для UMAG
           </button>
           <button type="button" className="btn" onClick={copy} title="Скопировать столбцы и вставить в окно импорта UMAG через Ctrl+V">

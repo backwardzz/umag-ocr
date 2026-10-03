@@ -6,6 +6,7 @@ import { allIssues, applyUnitRules, approveAll, bulkEdit, patchItem, worstLevel 
 import { issue } from '../src/core/types';
 import { buildRows, DEFAULT_EXPORT, DEFAULT_UNIT_RULES, type ExportSettings } from '../src/core/export';
 import type { ParsedDoc, ParsedItem } from '../src/core/types';
+import { encodeSaudaInvoice, saudaBase, saudaInvoice } from '../src/core/sauda';
 
 let fails = 0;
 const check = (cond: boolean, msg: string) => { if (!cond) { fails++; console.log(`  FAIL: ${msg}`); } else console.log(`  ok: ${msg}`); };
@@ -73,6 +74,21 @@ check(lvl(patchItem(ok1, { barcode: '4870132003259' })) === 'warn', 'новый 
 const clean = item({ name: 'Айран', barcode: '4870132003257', qty: 3, price: 650, sum: 1950, barcodeSource: 'invoice' });
 const all = approveAll([warnRow, errRow, clean]);
 check(all[0].approved === true && all[1].approved === true && all[2] === clean, '«Проверено всё» отмечает только строки с предупреждениями');
+
+// Передача в Sauda: строки как в файле (без штрихкода не идут, одинаковые сложены), всегда в штуках
+const saudaDoc: ParsedDoc = { format: 't', formatName: 't', supplier: 'ТОО «Тест»', number: '7', date: '03.10.2026', issues: [], items: [
+  item({ name: 'Айран', barcode: '4870132003257', unit: 'шт', qty: 3, price: 650, sum: 1950 }),
+  item({ name: 'Айран', barcode: '4870132003257', unit: 'шт', qty: 1, price: 650, sum: 650 }),
+  item({ name: 'Без кода', qty: 2, price: 10, sum: 20 }),
+] };
+const sInv = saudaInvoice(saudaDoc, { ...DEFAULT_EXPORT, qtyMode: 'packs' });
+check(sInv.items.length === 1 && sInv.items[0].qty === 4 && sInv.items[0].price === 650 && sInv.supplier === 'ТОО «Тест»', 'в Sauda уходят строки со штрихкодом, одинаковые сложены');
+const sCode = encodeSaudaInvoice(sInv);
+const sBack = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(sCode.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))));
+check(/^[\w-]+$/.test(sCode) && sBack.items[0].name === 'Айран' && sBack.number === '7', 'накладная кодируется в адрес и читается обратно');
+check(saudaBase({ href: 'https://backwardzz.github.io/umag-ocr/', hostname: 'backwardzz.github.io' }) === 'https://backwardzz.github.io/sauda/', 'на Pages Sauda лежит рядом');
+check(saudaBase({ href: 'http://localhost:5179/', hostname: 'localhost' }) === 'http://localhost:5181/', 'локально Sauda на порту 5181');
+check(saudaBase({ href: 'x', hostname: 'y' }, 'https://my.site/app') === 'https://my.site/app/', 'адрес Sauda можно переопределить');
 
 console.log(fails ? `\nОшибок: ${fails}` : '\nЕдиницы и массовые правки: все проверки пройдены');
 process.exit(fails ? 1 : 0);

@@ -228,7 +228,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="brand__mark" aria-hidden>≡</span>
-          <span className="brand__name">Накладные <span className="brand__arrow">→</span> UMAG</span>
+          <span className="brand__name">Накладные <span className="brand__arrow">→</span> Sauda</span>
         </div>
         <nav className="topbar__nav">
           {doneDocs.length > 1 && (
