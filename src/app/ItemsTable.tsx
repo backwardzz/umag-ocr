@@ -108,7 +108,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
     const issues = allIssues(it, catalog);
     const suggestions = !it.barcode && catalog && catalog.size ? catalog.suggest(sourceName(it)) : [];
     // тот же штрихкод выше (бонусная строка) — в файле строки сложатся
-    // и другой штрихкод того же товара UMAG (вкус, заведённый дополнительным штрихкодом)
+    // и другой штрихкод того же товара Sauda (вкус, заведённый дополнительным штрихкодом)
     const first = it.barcode ? items.findIndex((x) => x.barcode === it.barcode || (!!it.catalogBarcode && x.catalogBarcode === it.catalogBarcode)) : -1;
     return { it, issues, level: worstLevel(issues), suggestions, sameAs: first >= 0 && first < i ? first : undefined };
   }), [items, catalog]);
@@ -167,18 +167,18 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                     {it.code && it.code !== it.barcode && <span>код {it.code}{it.codeAlt && !it.barcode ? ` / ${it.codeAlt}` : ''}</span>}
                     {it.barcodeSource === 'mapping' && <span className="tag">из справочника</span>}
                     {it.altBarcode && (
-                      <span className="tag" title={`В накладной штрихкод ${it.altBarcode} — в UMAG он записан у товара дополнительным («Доп. код»), в файл идёт основной штрихкод товара`}>
+                      <span className="tag" title={`В накладной штрихкод ${it.altBarcode} — в Sauda он записан у товара дополнительным («Доп. код»), в файл идёт основной штрихкод товара`}>
                         доп. код {it.altBarcode} → основной
                       </span>
                     )}
                     {it.barcodeSource === 'catalog' && (
                       <>
                         {it.catalogMatch?.by === 'fix' ? (
-                          <span className="tag tag--hint" title={`В накладной прочитано ${it.ocrBarcode ?? ''}, в каталоге UMAG похожий: ${it.catalogMatch.name}`}>
+                          <span className="tag tag--hint" title={`В накладной прочитано ${it.ocrBarcode ?? ''}, в каталоге Sauda похожий: ${it.catalogMatch.name}`}>
                             исправлен по каталогу · сверьте
                           </span>
                         ) : (
-                          <span className="tag tag--hint" title={`Найдено в каталоге UMAG: ${it.catalogMatch?.name ?? ''}`}>
+                          <span className="tag tag--hint" title={`Найдено в каталоге Sauda: ${it.catalogMatch?.name ?? ''}`}>
                             автозаполнение · возможна ошибка
                           </span>
                         )}
@@ -189,7 +189,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                       </>
                     )}
                     {suggestions.length > 0 && <span className="tag tag--hint">есть подсказки: {suggestions.length}</span>}
-                    {sameAs !== undefined && <span className="tag" title="В файле для UMAG складываются строки с одинаковым штрихкодом и разные штрихкоды одного товара UMAG">сложится со строкой {sameAs + 1}</span>}
+                    {sameAs !== undefined && <span className="tag" title="В файле для Sauda складываются строки с одинаковым штрихкодом и разные штрихкоды одного товара Sauda">сложится со строкой {sameAs + 1}</span>}
                   </div>
                 </td>
                 <td className="c-name">
@@ -197,7 +197,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                   {it.invoiceName && it.invoiceName !== it.name && (
                     <div className="cell-sub">
                       {it.nameSource === 'catalog' && (
-                        <span className="tag" title="Название взято из каталога UMAG по штрихкоду — так оно попадёт в файл">из базы</span>
+                        <span className="tag" title="Название взято из каталога Sauda по штрихкоду — так оно попадёт в файл">из базы</span>
                       )}
                       <span className="cell-sub__orig" title="Название, как оно напечатано в накладной или введено вручную, — по нему найден товар">{it.added ? 'введено' : 'в накладной'}: {it.invoiceName}</span>
                     </div>
@@ -228,7 +228,7 @@ export function ItemsTable({ items, catalog, onChange, onRemove, onAdd, selected
                 <td className="c-num c-qty" data-label="Кол-во">
                   <NumInput value={it.qty} label={`Количество, строка ${i + 1}`} invalid={!it.qty} onCommit={(v) => onChange(i, { qty: v })} onScale={(f) => onScale(i, 'qty', f)} />
                   {it.orig && (it.orig.qty !== it.qty || it.orig.unit !== it.unit) && (
-                    <div className="cell-sub cell-sub--num" title="Так в накладной — количество и цена пересчитаны под приёмку UMAG (сумма как в накладной)">
+                    <div className="cell-sub cell-sub--num" title="Так в накладной — количество и цена пересчитаны под приёмку Sauda (сумма как в накладной)">
                       было {qtyFmt(it.orig.qty)} {it.orig.unit ?? ''}
                     </div>
                   )}

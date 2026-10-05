@@ -139,7 +139,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   const copy = async () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего копировать'); return; }
     const ok = await copyText(toTsv(rows));
-    toast(ok ? `Скопировано строк: ${dataRows}. В UMAG: «Импорт товаров» → Ctrl+V → «Табуляция»` : 'Не удалось скопировать');
+    toast(ok ? `Скопировано строк: ${dataRows}. Вставьте через Ctrl+V` : 'Не удалось скопировать');
   };
   const field = (key: 'supplier' | 'number' | 'date', label: string, width?: string) => (
     <label className="field" style={width ? { width } : undefined}>
@@ -165,13 +165,13 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           <button type="button" className="btn btn--primary" onClick={toSauda} title="Открыть Sauda и создать из накладной черновик приёмки">
             В Sauda
           </button>
-          <button type="button" className="btn" onClick={download} title="Файл для «Приёмка → Импорт товаров» в UMAG">
-            <IconDownload /> Excel для UMAG
+          <button type="button" className="btn" onClick={download} title="Скачать строки накладной файлом Excel">
+            <IconDownload /> Excel
           </button>
-          <button type="button" className="btn" onClick={copy} title="Скопировать столбцы и вставить в окно импорта UMAG через Ctrl+V">
+          <button type="button" className="btn" onClick={copy} title="Скопировать столбцы в буфер обмена — вставляются через Ctrl+V">
             <IconCopy /> Копировать
           </button>
-          <button type="button" className="btn btn--ghost" onClick={() => downloadBlob(toReportBlob([doc]), exportFileName(doc).replace('UMAG_', 'Отчёт_'))} title="Все поля и замечания — для проверки и архива">
+          <button type="button" className="btn btn--ghost" onClick={() => downloadBlob(toReportBlob([doc]), exportFileName(doc).replace('Sauda_', 'Отчёт_'))} title="Все поля и замечания — для проверки и архива">
             Отчёт
           </button>
           <button type="button" className="icon-btn" onClick={onDelete} title="Убрать накладную" aria-label="Убрать накладную"><IconTrash /></button>
@@ -192,7 +192,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           В файл: {s.exportable} из {s.rows}{s.missingBarcode ? ` · ${s.missingBarcode} без штрихкода` : ''}
         </span>
         {merged > 0 && (
-          <span className="chip" title="Строки с одинаковым штрихкодом (например, бонусные по 1 ₸) и разные штрихкоды одного товара UMAG (вкусы, заведённые дополнительными штрихкодами) складываются в одну: количество суммируется, цена — средняя, штрихкод — основной штрихкод товара">
+          <span className="chip" title="Строки с одинаковым штрихкодом (например, бонусные по 1 ₸) и разные штрихкоды одного товара Sauda (вкусы, заведённые дополнительными штрихкодами) складываются в одну: количество суммируется, цена — средняя, штрихкод — основной штрихкод товара">
             Одинаковые товары сложены: {dataRows} строк в файле
           </span>
         )}
@@ -217,7 +217,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
             selected={selected} onToggle={toggle} onToggleAll={(on) => setSelected(new Set(on ? doc.items.map((_, i) => i) : []))}
             onScale={(i, field, factor) => bulk([i], { kind: 'scale', field, factor })} />
           <div className="totals-bar">
-            <span className="totals-bar__qty" title="Сумма количеств по всем строкам — как они попадут в файл для UMAG">
+            <span className="totals-bar__qty" title="Сумма количеств по всем строкам — как они попадут в файл для Sauda">
               Всего: <b>{qtyTotals.map((t) => `${qtyFmt(t.qty)}${t.unit ? ` ${t.unit}` : ''}`).join(' · ') || '0'}</b>
               {invoiceQty !== undefined && (
                 <span className={qtyOk ? 'totals-bar__ok' : 'totals-bar__bad'}>
@@ -237,7 +237,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           {autofilled > 0 && (
             <p className="autofill-note">
               <IconAlert /> Штрихкоды в {autofilled} {plural(autofilled, 'строке', 'строках', 'строках')} заполнены или исправлены автоматически
-              по каталогу UMAG (такие строки отмечены «автозаполнение» или «исправлен по каталогу»). Возможны ошибки: сверьте товар и нажмите «верно» —
+              по каталогу Sauda (такие строки отмечены «автозаполнение» или «исправлен по каталогу»). Возможны ошибки: сверьте товар и нажмите «верно» —
               подтверждённый штрихкод запомнится и в следующий раз подставится без пометки.
             </p>
           )}

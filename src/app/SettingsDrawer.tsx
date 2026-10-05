@@ -58,8 +58,8 @@ export function SettingsDrawer(p: Props) {
       <aside className="drawer" role="dialog" aria-label="Настройки" onClick={(e) => e.stopPropagation()}>
         <div className="drawer__head">
           <div className="seg" role="tablist">
-            <button type="button" className={p.tab === 'export' ? 'is-on' : ''} onClick={() => p.onTab('export')}>Файл для UMAG</button>
-            <button type="button" className={p.tab === 'catalog' ? 'is-on' : ''} onClick={() => p.onTab('catalog')}>Каталог UMAG</button>
+            <button type="button" className={p.tab === 'export' ? 'is-on' : ''} onClick={() => p.onTab('export')}>Файл Excel</button>
+            <button type="button" className={p.tab === 'catalog' ? 'is-on' : ''} onClick={() => p.onTab('catalog')}>Каталог Sauda</button>
             <button type="button" className={p.tab === 'mapping' ? 'is-on' : ''} onClick={() => p.onTab('mapping')}>Справочник кодов</button>
           </div>
           <button type="button" className="icon-btn" onClick={p.onClose} aria-label="Закрыть"><IconX /></button>
@@ -68,7 +68,7 @@ export function SettingsDrawer(p: Props) {
         {p.tab === 'export' && (
           <div className="drawer__body">
             <h3>Столбцы и их порядок</h3>
-            <p className="muted">Порядок должен совпадать с тем, что вы выберете над столбцами в окне «Импорт товаров» UMAG. По умолчанию UMAG предлагает «Штрихкод», «Количество», «Название», «Ед. изм».</p>
+            <p className="muted">В таком порядке столбцы попадут в файл Excel и в буфер обмена по кнопке «Копировать». На кнопку «В Sauda» порядок не влияет.</p>
             <ul className="colpick">
               {ordered.map((c) => {
                 const on = s.columns.includes(c);
@@ -88,9 +88,7 @@ export function SettingsDrawer(p: Props) {
             </ul>
             <label className="check">
               <input type="checkbox" checked={s.header} onChange={(e) => p.onSettings({ ...s, header: e.target.checked })} />
-              Первая строка — названия столбцов
-              <span className="muted"> (UMAG может принять её за товар — тогда удалите её в окне импорта)</span>
-            </label>
+              Первая строка — названия столбцов            </label>
             <h3>Товары в упаковках</h3>
             <p className="muted">Когда в накладной «3 X 24» (3 упаковки по 24 шт), как выгружать количество:</p>
             <label className="check"><input type="radio" name="qm" checked={s.qtyMode === 'pcs'} onChange={() => p.onSettings({ ...s, qtyMode: 'pcs' })} /> В штуках (72 шт, цена за штуку)</label>
@@ -98,7 +96,7 @@ export function SettingsDrawer(p: Props) {
             <p className="muted">Цена в файле всегда с НДС — это то, что вы платите поставщику.</p>
             <h3>Пересчёт единиц</h3>
             <p className="muted">
-              При загрузке накладной строки с такой единицей пересчитываются так, как их принимает UMAG: количество
+              При загрузке накладной строки с такой единицей пересчитываются так, как их принимает Sauda: количество
               умножается, цена делится (1 блок по 11 618 → 10 шт по 1 161,80), единица меняется. Сумма остаётся
               как в накладной. Исходные количество и цена видны под строкой, вернуть их можно
               кнопкой «Как в накладной» над таблицей.
@@ -111,7 +109,7 @@ export function SettingsDrawer(p: Props) {
                   <input className="rules__unit" list="units-list" value={r.from} aria-label="Единица в накладной" onChange={(e) => setRule(i, { from: e.target.value })} />
                   <span>=</span>
                   <input className="rules__num" type="number" min="0" step="any" value={r.factor} aria-label="Сколько" onChange={(e) => setRule(i, { factor: Number(e.target.value) })} />
-                  <input className="rules__unit" list="units-list" value={r.to} aria-label="Единица в UMAG" onChange={(e) => setRule(i, { to: e.target.value })} />
+                  <input className="rules__unit" list="units-list" value={r.to} aria-label="Единица в Sauda" onChange={(e) => setRule(i, { to: e.target.value })} />
                   <button type="button" className="icon-btn" aria-label="Удалить правило" onClick={() => p.onSettings({ ...s, unitRules: s.unitRules.filter((_, k) => k !== i) })}><IconTrash /></button>
                 </li>
               ))}
@@ -128,16 +126,16 @@ export function SettingsDrawer(p: Props) {
 
         {p.tab === 'catalog' && (
           <div className="drawer__body">
-            <h3>Каталог товаров из UMAG</h3>
+            <h3>Каталог товаров из Sauda</h3>
             <p className="muted">
-              Выгрузите товары: UMAG → «Товары» → «Список товаров» → «Импорт/Экспорт» → «Экспорт товаров», и загрузите файл сюда.
+              Выгрузите товары: Sauda → «Товары» → «Список товаров» → «Импорт/Экспорт» → «Экспорт товаров», и загрузите файл сюда.
               Файл загружается один раз и хранится только в этом браузере (на другом устройстве загрузите его ещё раз).
             </p>
             <p className="muted">
               Если в накладной нет штрихкода, программа <b>заполнит его автоматически</b>: по коду NTIN, а если его нет —
               по похожему названию, с учётом объёма, веса и поставщика. Такие строки помечаются «автозаполнение · возможна ошибка»:
               сверьте товар и нажмите «верно». Ещё каталог подсказывает штрихкод в выпадающем списке и предупреждает,
-              если товара из накладной нет в UMAG.
+              если товара из накладной нет в Sauda.
             </p>
             <p className="muted">
               Если штрихкод из накладной прочитан с ошибкой (не сходится контрольная цифра) и в каталоге есть ровно один
@@ -145,12 +143,12 @@ export function SettingsDrawer(p: Props) {
             </p>
             <p className="muted">
               <b>Названия берутся из каталога:</b> если штрихкод строки есть в каталоге (из накладной, из справочника,
-              подобран автоматически или введён вручную), название заменяется названием из UMAG — так оно и попадёт в файл.
+              подобран автоматически или введён вручную), название заменяется названием из Sauda — так оно и попадёт в файл.
               Название из накладной видно под ним серым. Если исправить название вручную, оно больше не заменяется.
             </p>
             <p><b>{p.catalogSize ? `Загружено товаров: ${p.catalogSize}` : 'Каталог не загружен'}</b></p>
             <div className="row-btns">
-              <button type="button" className="btn btn--primary" onClick={() => catRef.current?.click()}>Загрузить файл UMAG</button>
+              <button type="button" className="btn btn--primary" onClick={() => catRef.current?.click()}>Загрузить файл Sauda</button>
               {p.catalogSize > 0 && <button type="button" className="btn btn--ghost" onClick={() => p.onCatalog([])}><IconTrash /> Очистить</button>}
             </div>
             <input ref={catRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={async (e) => {
@@ -177,7 +175,7 @@ export function SettingsDrawer(p: Props) {
               Хранится в этом браузере — сохраните файл, чтобы перенести на другой компьютер.
             </p>
             <div className="row-btns">
-              <button type="button" className="btn" onClick={() => downloadBlob(exportMappingJson(p.mapping), 'umag-spravochnik.json')}>Сохранить в файл</button>
+              <button type="button" className="btn" onClick={() => downloadBlob(exportMappingJson(p.mapping), 'sauda-spravochnik.json')}>Сохранить в файл</button>
               <button type="button" className="btn" onClick={() => mapRef.current?.click()}>Загрузить из файла</button>
             </div>
             <input ref={mapRef} type="file" accept=".json" hidden onChange={async (e) => {

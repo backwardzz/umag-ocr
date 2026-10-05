@@ -33,7 +33,7 @@ check(d.items[2] === doc.items[2], 'строка в штуках не трону
 check(applyUnitRules(d, DEFAULT_UNIT_RULES) === d, 'повторное применение ничего не меняет');
 check(applyUnitRules(doc, []) === doc, 'без правил накладная не меняется');
 
-console.log('Файл для UMAG');
+console.log('Файл для Sauda');
 const rows = buildRows(d, settings);
 check(JSON.stringify(rows[0]) === JSON.stringify(['4600000000011', 10, 'Winston Blue', 'шт', 1113.6, 11136]), `строка файла: ${JSON.stringify(rows[0])}`);
 // бонусный блок тем же штрихкодом: 1 блок по 11 136 и 1 блок по 1 ₸ → 20 шт, цена средняя по количеству

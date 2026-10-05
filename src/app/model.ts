@@ -145,7 +145,7 @@ const digitDiff = (a: string, b: string) => (a.length === b.length ? [...a].filt
 
 /**
  * Штрихкод из накладной прочитан с ошибкой (OCR путает 5, 6, 8 и 9 в мелком шрифте), и такого
- * штрихкода нет в каталоге UMAG. Кандидаты — товары каталога со штрихкодом, отличающимся от
+ * штрихкода нет в каталоге Sauda. Кандидаты — товары каталога со штрихкодом, отличающимся от
  * прочтения одной цифрой (если не сходится контрольная цифра), и товар, найденный по названию,
  * если его штрихкод отличается не больше чем в трёх цифрах. Исправляем, только если кандидат один.
  */
@@ -173,7 +173,7 @@ export function catalogFix(it: ParsedItem, doc: ParsedDoc, catalog: CatalogIndex
 }
 
 /**
- * Автозаполнение штрихкодов из каталога UMAG для строк, где штрихкода нет ни в накладной,
+ * Автозаполнение штрихкодов из каталога Sauda для строк, где штрихкода нет ни в накладной,
  * ни в справочнике: по NTIN (точно) или по похожему названию (возможны ошибки).
  * Прежнее автозаполнение пересчитывается — каталог могли заменить или очистить.
  */
@@ -202,7 +202,7 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
 
 /**
  * Название строки ввели или исправили вручную, а штрихкода у неё нет (новая строка, строка без кода):
- * ищем товар в каталоге UMAG по этому названию и подставляем его штрихкод — как автозаполнение
+ * ищем товар в каталоге Sauda по этому названию и подставляем его штрихкод — как автозаполнение
  * при загрузке накладной (строка помечается «автозаполнение», название берётся из каталога).
  * Штрихкод из накладной, справочника или введённый вручную не трогаем. Не нашлось — прежнее
  * автозаполнение снимается: оно было подобрано под другое название.
@@ -221,12 +221,12 @@ export function fillBarcodeByName(it: ParsedItem, doc: ParsedDoc, catalog?: Cata
 }
 
 /**
- * Названия из каталога UMAG: если штрихкод строки есть в загруженной базе (из накладной,
+ * Названия из каталога Sauda: если штрихкод строки есть в загруженной базе (из накладной,
  * из справочника, подобран по названию или введён вручную), название берём из базы —
- * в файл для UMAG попадёт название как в магазине. Название из накладной сохраняется
+ * в файл для Sauda попадёт название как в магазине. Название из накладной сохраняется
  * в invoiceName (по нему идёт поиск). Название, исправленное вручную, не трогаем.
  * Если штрихкода в базе больше нет (каталог очищен, штрихкод изменён) — возвращаем название из накладной.
- * Здесь же штрихкод, записанный у товара UMAG дополнительным («Доп. код»), заменяется основным.
+ * Здесь же штрихкод, записанный у товара Sauda дополнительным («Доп. код»), заменяется основным.
  */
 export function applyCatalogNames(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc {
   let changed = false;
@@ -234,13 +234,13 @@ export function applyCatalogNames(doc: ParsedDoc, catalog?: CatalogIndex): Parse
     // штрихкод строки, как он пришёл (из накладной, справочника, вручную), — до замены на основной
     const own = src.altBarcode ?? src.barcode;
     const found = own && catalog?.size ? catalog.get(own) : undefined;
-    // товар UMAG строки — по нему в файле складываются разные штрихкоды одного товара
+    // товар Sauda строки — по нему в файле складываются разные штрихкоды одного товара
     let it = src.catalogBarcode === found?.barcode ? src : { ...src, catalogBarcode: found?.barcode };
     // Штрихкод строки записан у товара дополнительным («Доп. код») — в приёмку идёт основной штрихкод товара
     const barcode = found?.barcode ?? own;
     const altBarcode = found && found.barcode !== own ? own : undefined;
     if (it.barcode !== barcode || it.altBarcode !== altBarcode) it = { ...it, barcode, altBarcode };
-    // единица не прочитана в накладной — берём единицу товара в UMAG («литр» там пишут полностью)
+    // единица не прочитана в накладной — берём единицу товара в Sauda («литр» там пишут полностью)
     if (!it.unit && found?.unit) it = { ...it, unit: found.unit === 'литр' ? 'л' : found.unit };
     if (it !== src) changed = true;
     if (it.nameSource === 'manual') return it;
@@ -272,10 +272,10 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
         : 'Нет штрихкода — строка не попадёт в файл', 'barcode'));
   } else {
     if (it.barcodeSource === 'catalog' && it.catalogMatch?.by === 'fix') {
-      out.push(issue('warn', `В накладной штрихкод прочитан как ${it.ocrBarcode ?? '?'} — такого нет в каталоге UMAG, `
+      out.push(issue('warn', `В накладной штрихкод прочитан как ${it.ocrBarcode ?? '?'} — такого нет в каталоге Sauda, `
         + `исправлен на похожий штрихкод товара «${it.catalogMatch.name}», сверьте`, 'autofill'));
     } else if (it.barcodeSource === 'catalog' && it.catalogMatch) {
-      out.push(issue('warn', `Штрихкод подобран из каталога UMAG ${it.catalogMatch.by === 'code' ? 'по NTIN' : `по названию из накладной «${sourceName(it)}»`}`
+      out.push(issue('warn', `Штрихкод подобран из каталога Sauda ${it.catalogMatch.by === 'code' ? 'по NTIN' : `по названию из накладной «${sourceName(it)}»`}`
         + ' — возможна ошибка, сверьте', 'autofill'));
     }
     if (!/^\d+$/.test(it.barcode)) out.push(issue('error', 'Штрихкод должен состоять только из цифр'));
@@ -283,7 +283,7 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
     else if ((it.barcode.length === 13 || it.barcode.length === 8) && !isValidEan(it.barcode) && !it.barcode.startsWith('2'))
       out.push(issue('warn', 'Контрольная цифра штрихкода не сходится — проверьте'));
     if (catalog && catalog.size > 0 && !catalog.has(it.barcode))
-      out.push(issue('warn', 'Такого штрихкода нет в каталоге UMAG — создайте товар или проверьте штрихкод'));
+      out.push(issue('warn', 'Такого штрихкода нет в каталоге Sauda — создайте товар или проверьте штрихкод'));
   }
   if (!it.qty) out.push(issue('error', 'Не указано количество'));
   if (it.price === undefined) out.push(issue('error', 'Не указана цена'));
@@ -293,7 +293,7 @@ export function itemProblems(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
 export function allIssues(it: ParsedItem, catalog?: CatalogIndex): Issue[] {
   // замечание разбора о контрольной цифре неактуально, если штрихкод заменён (из каталога, справочника, вручную)
   const parsed = (it.edited ? [] : it.barcodeSource === 'invoice' ? it.issues : it.issues.filter((x) => x.kind !== 'ean'))
-    // «не прочитано наименование» неактуально, если название есть (например, из каталога UMAG)
+    // «не прочитано наименование» неактуально, если название есть (например, из каталога Sauda)
     .filter((x) => !(x.kind === 'noname' && it.name.trim()));
   const all = [...itemProblems(it, catalog), ...parsed];
   // строка проверена пользователем — предупреждения сняты (ошибки и «нет штрихкода» остаются)
@@ -395,7 +395,7 @@ export type BulkOp =
   | { kind: 'scale'; field: 'qty' | 'price'; factor: number }
   | { kind: 'unit'; unit?: string }
   /**
-   * Пересчёт единиц под приёмку UMAG: количество × factor, цена ÷ factor и новая единица
+   * Пересчёт единиц под приёмку Sauda: количество × factor, цена ÷ factor и новая единица
    * (1 блок по 11 618 = 10 шт по 1 161,80). Сумма не меняется.
    */
   | { kind: 'convert'; factor: number; unit: string }
@@ -414,7 +414,7 @@ export function bulkEditItem(it: ParsedItem, op: BulkOp): ParsedItem {
     return fixPack({
       ...withOrig(it),
       qty: it.qty === undefined ? undefined : round3(it.qty * op.factor),
-      // UMAG принимает цену за единицу: блок стал десятью пачками — цена пачки в 10 раз меньше
+      // Sauda принимает цену за единицу: блок стал десятью пачками — цена пачки в 10 раз меньше
       price: it.price === undefined ? undefined : round2(it.price / op.factor),
       unit: op.unit,
     });

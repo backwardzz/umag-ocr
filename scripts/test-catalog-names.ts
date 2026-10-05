@@ -1,5 +1,5 @@
 /**
- * Названия из каталога UMAG (без OCR, на искусственных данных):
+ * Названия из каталога Sauda (без OCR, на искусственных данных):
  *  1) штрихкод есть в накладной и в каталоге — название из каталога;
  *  2) штрихкода нет — подбирается по названию из накладной, затем название меняется на каталожное;
  *  3) ручная правка названия, ручной ввод штрихкода, очистка каталога, повторное применение.
@@ -17,9 +17,9 @@ const catalogItems: CatalogItem[] = [
   { name: 'Сигареты Camel Aroma Red', barcode: '4600000000011', supplier: 'Мегаполис' },
   { name: 'Сигареты Parliament Aqua Blue', barcode: '4600000000028', supplier: 'Мегаполис' },
   { name: 'Chupa Chups ассорти 12г', barcode: '8410031000000' },
-  // вкусы одного товара UMAG — дополнительными штрихкодами
+  // вкусы одного товара Sauda — дополнительными штрихкодами
   { name: 'Borjomi Energy', barcode: '4860019003623', extra: ['4860019003647', '4860019003685'] },
-  // разные товары UMAG с одинаковым названием
+  // разные товары Sauda с одинаковым названием
   { name: 'Мармелад Strike 70г', barcode: '4680167313029', price: 129 },
   { name: 'Мармелад Strike 70г', barcode: '4607010743475', price: 153 },
 ];
@@ -92,7 +92,7 @@ const fxCleared = applyCatalog(fx, undefined);
 check(fxCleared.items[0].barcode === '4823077604563' && fxCleared.items[0].barcodeSource === 'invoice' && !fxCleared.items[0].ocrBarcode,
   'каталог очищен → штрихкод как в накладной');
 
-console.log('Файл для UMAG: складываются штрихкоды одного товара UMAG, а не одинаковые названия');
+console.log('Файл для Sauda: складываются штрихкоды одного товара Sauda, а не одинаковые названия');
 const flavors: ParsedDoc = { ...doc, items: [
   item({ name: 'энергетик оригинальный', barcode: '4860019003623', qty: 5, price: 631, sum: 3155, barcodeSource: 'invoice' }),
   item({ name: 'энергетик вишня', barcode: '4860019003647', qty: 5, price: 631, sum: 3155, barcodeSource: 'invoice' }),
@@ -103,11 +103,11 @@ const flavors: ParsedDoc = { ...doc, items: [
 const fl = buildRows(enrichDoc(flavors, {}, catalog), DEFAULT_EXPORT);
 check(fl.length === 3, `строк в файле: ${fl.length} (вкусы Borjomi — одна строка, два разных мармелада — две)`);
 check(fl[0][0] === '4860019003623' && fl[0][1] === 11, 'вкусы одного товара: основной штрихкод товара, количество сложено (5 + 5 + 1)');
-check(fl[1][0] === '4680167313029' && fl[2][0] === '4607010743475', 'одинаковое название у разных товаров UMAG — строки не складываются');
+check(fl[1][0] === '4680167313029' && fl[2][0] === '4607010743475', 'одинаковое название у разных товаров Sauda — строки не складываются');
 const noCat = buildRows(applyCatalogNames(enrichDoc(flavors, {}, catalog), undefined), DEFAULT_EXPORT);
 check(noCat.length === 5, 'каталог очищен — каждая строка отдельно');
 
-console.log('Доп. код товара UMAG (колонка D) → основной штрихкод (колонка B)');
+console.log('Доп. код товара Sauda (колонка D) → основной штрихкод (колонка B)');
 {
   const d0: ParsedDoc = { ...doc, items: [
     item({ name: 'Боржоми Энерджи вишня', barcode: '4860019003647', barcodeSource: 'invoice' }),

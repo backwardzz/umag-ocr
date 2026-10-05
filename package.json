@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Распознавание фото накладных и выгрузка в Excel для импорта в UMAG",
+  "description": "Распознавание фото накладных и выгрузка в Excel для импорта в Sauda",
   "scripts": {
     "postinstall": "node scripts/copy-ocr-assets.mjs",
     "dev": "vite",

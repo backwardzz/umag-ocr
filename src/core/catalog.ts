@@ -1,9 +1,9 @@
 /**
- * Каталог товаров UMAG (файл «Товары → Импорт/Экспорт → Экспорт товаров»).
+ * Каталог товаров Sauda (файл «Товары → Импорт/Экспорт → Экспорт товаров»).
  * Нужен, чтобы:
  *  1) автоматически подставлять штрихкод, если в накладной его нет (по NTIN или по названию);
  *  2) подсказывать штрихкод по названию в выпадающем списке;
- *  3) предупреждать, если штрихкода из накладной нет в UMAG (товар надо создать).
+ *  3) предупреждать, если штрихкода из накладной нет в Sauda (товар надо создать).
  * Хранится только в браузере пользователя (сайт публичный — в код каталог не встраиваем).
  */
 import * as XLSX from 'xlsx';
@@ -14,9 +14,9 @@ export interface CatalogItem {
   /** Дополнительные штрихкоды и коды (столбцы «Доп. код», «Код НКТ (NTIN)») */
   extra?: string[];
   unit?: string;
-  /** Поставщик, как он назван в UMAG */
+  /** Поставщик, как он назван в Sauda */
   supplier?: string;
-  /** Закупочная цена в UMAG — обычно равна цене в накладной, помогает отличить 0,45 л от 0,9 л */
+  /** Закупочная цена в Sauda — обычно равна цене в накладной, помогает отличить 0,45 л от 0,9 л */
   price?: number;
 }
 
@@ -53,7 +53,7 @@ export function saveCatalog(items: CatalogItem[]): boolean {
 const codesOf = (v: unknown) => String(v ?? '').split(/[;,\s]+/).map((c) => c.replace(/\D/g, '')).filter((c) => c.length >= 4);
 
 /**
- * Читает Excel/CSV из UMAG: ищет строку заголовка со столбцами «Название» и «Штрихкод»,
+ * Читает Excel/CSV из Sauda: ищет строку заголовка со столбцами «Название» и «Штрихкод»,
  * необязательные — «Доп. код», «Код НКТ (NTIN)», «Ед. изм», «Поставщик».
  */
 export function parseCatalogData(data: ArrayBuffer | Uint8Array): CatalogItem[] {
@@ -110,7 +110,7 @@ export function normalizeName(s: string): string {
     .replace(/[а-яёәғқңөұүһі]/g, (c) => TRANSLIT[c] ?? c)
     .replace(/(\d)[.,](\d)/g, '$1$2')
     .replace(/[^a-z0-9]+/g, ' ')
-    // сигареты: «Superslims» и «SS» в накладной = «Super Slims» в UMAG (и наоборот)
+    // сигареты: «Superslims» и «SS» в накладной = «Super Slims» в Sauda (и наоборот)
     .replace(/\bsuperslims\b|\bss\b/g, 'super slims')
     .trim();
 }
@@ -181,9 +181,9 @@ export interface CatalogQuery {
   unit?: string;
   /** Поставщик накладной — товары этого поставщика в каталоге получают преимущество */
   supplier?: string;
-  /** NTIN или другой код из накладной, который может совпасть со штрихкодом в UMAG */
+  /** NTIN или другой код из накладной, который может совпасть со штрихкодом в Sauda */
   codes?: string[];
-  /** Цена за единицу в накладной — сравнивается с закупочной ценой в UMAG */
+  /** Цена за единицу в накладной — сравнивается с закупочной ценой в Sauda */
   price?: number;
 }
 
@@ -204,7 +204,7 @@ interface Entry { item: CatalogItem; tri: Set<string>; words: Word[]; sizes: num
 const toWords = (name: string): Word[] => [...wordsOf(name)].map((w) => ({ w, tri: trigrams(w), weight: WEAK.test(w) ? 0.5 : 1 }));
 
 /**
- * Похожесть слов 0…1 с учётом того, что в накладной и в UMAG названия пишут по-разному:
+ * Похожесть слов 0…1 с учётом того, что в накладной и в Sauda названия пишут по-разному:
  * сокращения («shokol» из «шокол-е» ↔ «shokoladnoe»), транслит и опечатки
  * («syurpriz» ↔ «surprise»), ошибки OCR в отдельных буквах.
  */
@@ -259,7 +259,7 @@ export class CatalogIndex {
 
   get(barcode: string) { return this.byBarcode.get(barcode); }
 
-  /** Штрихкод по коду из накладной: NTIN «0200132903914» заведён в UMAG как «200132903914» */
+  /** Штрихкод по коду из накладной: NTIN «0200132903914» заведён в Sauda как «200132903914» */
   byCode(code: string): CatalogItem | undefined {
     const c = code.replace(/\D/g, '');
     if (c.length < 8) return undefined;
@@ -301,7 +301,7 @@ export class CatalogIndex {
     const kg = (u?: string) => /^кг|kg/i.test(u ?? '');
     if (q.unit && e.item.unit) s += kg(q.unit) === kg(e.item.unit) ? 0.03 : -0.15;
     if (q.supplier && sameSupplier(q.supplier, e.item.supplier)) s += 0.12;
-    // Закупочная цена в UMAG обычно ровно равна цене в накладной (у блока сигарет — ×10 цены пачки)
+    // Закупочная цена в Sauda обычно ровно равна цене в накладной (у блока сигарет — ×10 цены пачки)
     if (q.price && q.price > 1 && e.item.price) {
       const r = q.price / e.item.price;
       const near = (k: number, tol: number) => Math.abs(r / k - 1) <= tol;

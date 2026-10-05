@@ -1,7 +1,7 @@
 /**
  * Быстрая проверка парсеров на сохранённых результатах OCR (samples/*.ocr.json),
  * без повторного распознавания. Эталоны — samples/*.expected.json (если есть).
- * Для каждой накладной дополнительно собирается Excel для UMAG и читается обратно.
+ * Для каждой накладной дополнительно собирается Excel для Sauda и читается обратно.
  *   npm test                 — кратко
  *   npm test -- -v           — со всеми строками
  *   npm test -- --no-strips  — только первый проход OCR (когда полосы записаны старым планом)
@@ -28,7 +28,7 @@ if (!fs.existsSync(dir)) {
 const catalogFile = path.join(dir, 'umag_catalog.xlsx');
 const catalog = fs.existsSync(catalogFile) ? new CatalogIndex(parseCatalogData(fs.readFileSync(catalogFile))) : undefined;
 
-/** Excel для UMAG: штрихкод, название и единица — текстом, количество и цена — числами */
+/** Excel для Sauda: штрихкод, название и единица — текстом, количество и цена — числами */
 async function checkExcel(doc: ParsedDoc): Promise<string[]> {
   const withCodes: ParsedDoc = { ...doc, items: doc.items.map((it, i) => ({ ...it, barcode: it.barcode ?? `20000000${String(i).padStart(5, '0')}` })) };
   const columns: ExportColumn[] = DEFAULT_EXPORT.columns;
@@ -55,7 +55,7 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.ocr.json') && (!o
   const page: OcrPage = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
   if (noStrips) delete page.strips;
   const doc = parseDocument(page);
-  // С каталогом UMAG (как в приложении) штрихкоды с ошибкой OCR исправляются на похожие из каталога
+  // С каталогом Sauda (как в приложении) штрихкоды с ошибкой OCR исправляются на похожие из каталога
   if (catalog) {
     const fixed: string[] = [];
     doc.items = doc.items.map((it) => {

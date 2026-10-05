@@ -1,9 +1,9 @@
 /**
- * Выгрузка для UMAG. Импорт в «Приёмке» (Закупки → Приёмка → «📥 Импорт товаров»)
+ * Выгрузка для Sauda. Импорт в «Приёмке» (Закупки → Приёмка → «📥 Импорт товаров»)
  * принимает файл или вставку столбцов через Ctrl+V; назначение каждого столбца
  * выбирается в выпадающем списке над ним. Выгружаем 5 столбцов:
  * Штрихкод, Количество, Название, Ед. изм, Цена приходная (за единицу, с НДС) —
- * и без строки заголовка (иначе UMAG примет её за товар).
+ * и без строки заголовка (иначе Sauda примет её за товар).
  */
 import * as XLSX from 'xlsx';
 import { round2 } from './numbers';
@@ -57,7 +57,7 @@ export function exportableItems(doc: ParsedDoc): ParsedItem[] {
 
 interface ExportLine {
   it: ParsedItem;
-  /** Штрихкод строки файла: свой, а если сложены разные штрихкоды одного товара UMAG — основной штрихкод товара */
+  /** Штрихкод строки файла: свой, а если сложены разные штрихкоды одного товара Sauda — основной штрихкод товара */
   barcode?: string;
   qty?: number; price?: number; unit?: string; sum?: number;
   /** Σ цена × количество — для средней цены */
@@ -65,9 +65,9 @@ interface ExportLine {
 }
 
 /**
- * Ключ слияния строк: товар UMAG, найденный по штрихкоду (в базе вкусы одного товара заведены
+ * Ключ слияния строк: товар Sauda, найденный по штрихкоду (в базе вкусы одного товара заведены
  * дополнительными штрихкодами одного товара), иначе — сам штрихкод. Одинаковое название не повод:
- * у разных товаров UMAG названия бывают одинаковыми («Мармелад Strike 70г» по 129 и по 153 ₸).
+ * у разных товаров Sauda названия бывают одинаковыми («Мармелад Strike 70г» по 129 и по 153 ₸).
  */
 function mergeKey(it: ParsedItem): string {
   return it.catalogBarcode ? `prod:${it.catalogBarcode}` : `bc:${it.barcode}`;
@@ -75,9 +75,9 @@ function mergeKey(it: ParsedItem): string {
 
 /**
  * Строки файла. Одинаковые штрихкоды (бонусный товар отдельной строкой по 1 ₸,
- * одна позиция на двух страницах) складываем: UMAG при импорте ищет товар по штрихкоду,
+ * одна позиция на двух страницах) складываем: Sauda при импорте ищет товар по штрихкоду,
  * и две строки с одним штрихкодом могут не сложиться. Так же складываем разные штрихкоды
- * одного товара UMAG (см. mergeKey). Цена — средняя, взвешенная по количеству.
+ * одного товара Sauda (см. mergeKey). Цена — средняя, взвешенная по количеству.
  */
 export function exportLines(doc: ParsedDoc, s: ExportSettings): ExportLine[] {
   const byKey = new Map<string, ExportLine>();
@@ -100,7 +100,7 @@ export function exportLines(doc: ParsedDoc, s: ExportSettings): ExportLine[] {
   return [...byKey.values()];
 }
 
-/** Сколько строк накладной сольются с другими в файле (одинаковый штрихкод или товар UMAG) */
+/** Сколько строк накладной сольются с другими в файле (одинаковый штрихкод или товар Sauda) */
 export function mergedLineCount(doc: ParsedDoc): number {
   const items = exportableItems(doc);
   return items.length - new Set(items.map(mergeKey)).size;
@@ -126,7 +126,7 @@ export function buildRows(doc: ParsedDoc, s: ExportSettings): (string | number)[
 }
 
 export function toTsv(rows: (string | number)[][]): string {
-  // Десятичный разделитель — точка: UMAG — веб-приложение, парсит как JS-число
+  // Десятичный разделитель — точка: Sauda — веб-приложение, парсит как JS-число
   return rows.map((r) => r.map((v) => String(v).replace(/[\t\n]/g, ' ')).join('\t')).join('\n');
 }
 
@@ -165,8 +165,8 @@ export function toReportBlob(docs: ParsedDoc[]): Blob {
         it.pack ? `${it.pack.count} x ${it.pack.size}` : '', it.price ?? '', it.sum ?? '', it.vat ?? '',
         [
           ...(it.barcodeSource === 'catalog' ? [it.catalogMatch?.by === 'fix'
-            ? `Штрихкод исправлен по каталогу UMAG: в накладной прочитано ${it.ocrBarcode ?? ''}, похожий — «${it.catalogMatch.name}»`
-            : `Штрихкод — автозаполнение из каталога UMAG («${it.catalogMatch?.name ?? ''}»), возможна ошибка`] : []),
+            ? `Штрихкод исправлен по каталогу Sauda: в накладной прочитано ${it.ocrBarcode ?? ''}, похожий — «${it.catalogMatch.name}»`
+            : `Штрихкод — автозаполнение из каталога Sauda («${it.catalogMatch?.name ?? ''}»), возможна ошибка`] : []),
           ...(it.orig ? [`В накладной: ${it.orig.qty ?? '?'} ${it.orig.unit ?? ''} по ${it.orig.price ?? '?'} ₸`.replace(/\s+/g, ' ')] : []),
           ...it.issues.filter((x) => x.level !== 'info' && !(x.kind === 'ean' && it.barcodeSource !== 'invoice')).map((x) => x.text),
         ].join('; '),
@@ -189,6 +189,6 @@ export function toReportBlob(docs: ParsedDoc[]): Blob {
 
 export function exportFileName(doc: ParsedDoc, ext = 'xlsx'): string {
   const sup = (doc.supplier ?? 'накладная').replace(/ТОО|ИП|["«»]/g, '').replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_|_$/g, '');
-  const parts = ['UMAG', sup || 'накладная', doc.number, doc.date?.replace(/\./g, '-')].filter(Boolean);
+  const parts = ['Sauda', sup || 'накладная', doc.number, doc.date?.replace(/\./g, '-')].filter(Boolean);
   return `${parts.join('_')}.${ext}`;
 }

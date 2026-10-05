@@ -808,7 +808,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       nameWords = nameSrc.filter((w) => w.x1 <= right && w.x0 < codeX0 && !(opts.unitBeforeCode && unitWords.has(w)));
     }
     const name = cleanName(nameWords, lineH, opts.nameSide === 'inline', i + 1);
-    // NTIN из строки («NTIN: 0200132903914» у Евразиан, столбец NTIN у Yupiter): в UMAG часть товаров
+    // NTIN из строки («NTIN: 0200132903914» у Евразиан, столбец NTIN у Yupiter): в Sauda часть товаров
     // заведена со штрихкодом, равным NTIN, — по нему каталог найдёт товар точно
     // (неуверенно прочитанный NTIN может совпасть с кодом другого товара — такие не берём)
     const ntins = [...new Set(bandWords.filter((w) => w.conf >= 50).map((w) => fixDigits(w.text).replace(/\D/g, '')).filter((d) => /^0?2\d{11}$/.test(d)))];

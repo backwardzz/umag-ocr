@@ -91,7 +91,7 @@ export default function App() {
           return;
         }
         const flagged = rel?.kind === 'duplicate'
-          ? { ...doc, issues: [issue('error', `Эта накладная уже загружена («${rel.target.fileName}») — не импортируйте её в UMAG дважды`, 'duplicate'), ...doc.issues] }
+          ? { ...doc, issues: [issue('error', `Эта накладная уже загружена («${rel.target.fileName}») — не импортируйте её в Sauda дважды`, 'duplicate'), ...doc.issues] }
           : doc;
         if (rel?.kind === 'duplicate') toast(`«${self?.fileName ?? 'Фото'}» — повтор уже загруженной накладной`);
         update(id, { status: 'done', progress: 1, doc: flagged, processedUrl: res.processedUrl });
@@ -236,7 +236,7 @@ export default function App() {
               Отчёт по всем
             </button>
           )}
-          <button type="button" className="btn btn--ghost" onClick={() => setHelp(true)} aria-label="Как загрузить в UMAG" title="Как загрузить в UMAG"><IconHelp /> <span className="hide-sm">Как загрузить в UMAG</span></button>
+          <button type="button" className="btn btn--ghost" onClick={() => setHelp(true)} aria-label="Как загрузить в Sauda" title="Как загрузить в Sauda"><IconHelp /> <span className="hide-sm">Как загрузить в Sauda</span></button>
           <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'mapping' })} aria-label="Справочник кодов" title="Справочник кодов"><IconBook /> <span className="hide-sm">Справочник</span></button>
           <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'export' })} aria-label="Настройки" title="Настройки"><IconSettings /> <span className="hide-sm">Настройки</span></button>
         </nav>
@@ -244,13 +244,13 @@ export default function App() {
 
       {docs.length === 0 ? (
         <main className="empty">
-          <h1>Фото или PDF накладной → Excel для UMAG</h1>
+          <h1>Фото или PDF накладной → приёмка в Sauda</h1>
           <p className="muted">Распознавание работает прямо в браузере, фото и PDF никуда не отправляются.</p>
           <UploadZone onFiles={addFiles} />
           <ol className="empty__steps">
             <li><b>Сфотографируйте</b> накладную или выберите готовые фото или PDF</li>
             <li><b>Проверьте</b> строки, отмеченные жёлтым или красным</li>
-            <li><b>Скачайте Excel</b> и загрузите его в UMAG: «Приёмка» → «Импорт товаров»</li>
+            <li><b>Нажмите «В Sauda»</b> — там создаётся черновик приёмки, останется его провести</li>
           </ol>
           <details className="formats-box">
             <summary>Какие накладные принимает система · {FORMATS_COUNT} поставщиков</summary>

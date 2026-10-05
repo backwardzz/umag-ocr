@@ -1,6 +1,6 @@
 import { SUPPLIERS, type SupplierDef } from '../core/suppliers';
 
-/** Откуда берётся штрихкод для UMAG у этого поставщика */
+/** Откуда берётся штрихкод для Sauda у этого поставщика */
 function codeNote(s: SupplierDef): { text: string; kind: 'ok' | 'once' | 'name' } {
   const code = s.z2?.code ?? 'digits';
   if (code === 'ean') return { text: 'штрихкод есть в накладной', kind: 'ok' };

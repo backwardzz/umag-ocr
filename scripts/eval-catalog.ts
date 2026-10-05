@@ -1,5 +1,5 @@
 /**
- * Оценка автозаполнения штрихкодов по каталогу UMAG на сохранённых накладных.
+ * Оценка автозаполнения штрихкодов по каталогу Sauda на сохранённых накладных.
  *   npm run catalog              — Node-OCR (samples/*.ocr.json)
  *   npm run catalog -- --browser — браузерный OCR (samples/*-browser.ocr.json)
  *   npm run catalog -- -v        — со всеми строками
