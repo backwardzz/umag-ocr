@@ -58,7 +58,7 @@ interface NumCell { num: string; unit?: string }
 /** Ячейка с числом (возможно, с единицей после: «12 бут», «1 кор.»); иначе undefined */
 export function parseNumCell(raw: string): NumCell | undefined {
   // «‚5 бут» — нижняя кавычка перед числом (в середине «4‚5» — это запятая, её не трогаем)
-  let t = raw.replace(JUNK_RE, ' ').replace(/(^|\s)-+|-+(?=\s|$)/g, ' ').replace(/^[‚\s]+/, '').replace(/\s+/g, ' ').trim();
+  let t = raw.replace(JUNK_RE, ' ').replace(/(^|\s)-+|-+(?=\s|$)/g, ' ').replace(/^[‚\s]+|[‚\s]+$/g, '').replace(/\s+/g, ' ').trim();
   let unit: string | undefined;
   const um = t.match(TRAILING_UNIT_RE);
   if (um && um.index !== undefined && /\d/.test(t.slice(0, um.index))) {
@@ -207,12 +207,12 @@ function findNumericAnchors(page: OcrPage, words: Word[], lineH: number): Anchor
   return dedupeByY(members.map((c) => ({ cy: c.cy, x0: c.x0, x1: c.x1, code: '', word: c.words[0] })), lineH);
 }
 
-/** Строка «Итого»: первое слово «Итог…» ниже начала таблицы */
-function findTotalsWord(words: Word[], afterY: number): Word | undefined {
+/** Строка «Итого»: слова «Итог…» ниже начала таблицы, сверху вниз */
+function findTotalsWords(words: Word[], afterY: number): Word[] {
   return words
     // «ИТОГ» OCR читает и как «Итаго», «УТогГ», «ЙТОГ», «Wroro:» (жирный шрифт)
     .filter((x) => x.cy > afterY && /^[^A-Za-zА-Яа-я]{0,2}(?:[иИuUуУйЙ][тТt][оoОOаАa][гГr]|[WwШш][rт][oо][rг][oо]?\W*$)/.test(x.text))
-    .sort((a, b) => a.cy - b.cy)[0];
+    .sort((a, b) => a.cy - b.cy);
 }
 
 /** Строка нумерации столбцов под шапкой: «1 2 3 4 5 6 7 8 9» */
@@ -251,7 +251,7 @@ function nameBand(anchors: Anchor[], i: number, opts: Z2Options, lineH: number, 
   const a = anchors[i], prev = anchors[i - 1]?.cy, next = anchors[i + 1]?.cy;
   const half = lineH * 0.5;
   // У первой строки нет соседа сверху: длинное наименование (3–4 строки) — на шаг строк вверх
-  const firstUp = opts.nameSide === 'inline' ? Math.max(lineH * 2.6, pitch * 0.9) : lineH * 2.6;
+  const firstUp = opts.nameSide === 'inline' || opts.barcodeInName ?Math.max(lineH * 2.6, pitch * 0.9) : lineH * 2.6;
   if (opts.nameDir === 'up') return { top: prev !== undefined ? prev + half : a.cy - firstUp, bottom: a.cy + half };
   // Перенесённый штрихкод начинается со второй строки наименования — первая строка выше кода
   const downTop = opts.codeWrap && prev === undefined ? a.cy - lineH * 1.6 : a.cy - half;
@@ -383,14 +383,53 @@ function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
 }
 
 /**
+ * Столбец «Сумма» не прочитан (обрезан или стёрт при обработке фото), а итог под таблицей есть: количество и цена —
+ * пара столбцов, у которой сумма произведений по строкам равна итогу. Сумму строки посчитает сверка: количество × цена
+ */
+function rolesByTotal(rows: number[][][], nCols: number, totalsWords?: Word[]): ColRole[] | undefined {
+  if (!totalsWords || rows.length < 2) return undefined;
+  const totals = extractNumbers(fixDigits(totalsWords.map((w) => w.text).join(' ').replace(JUNK_RE, ' '))).filter((t) => t.hasDecimals).map((t) => t.value);
+  for (let i = 0; i < nCols; i++) for (let j = i + 1; j < nCols; j++) {
+    if (!rows.every((r) => r[i].length && r[j].length)) continue;
+    const sum = round2(rows.reduce((acc, r) => acc + r[i][0] * r[j][0], 0));
+    if (sum > 0 && totals.some((t) => near(t, sum, 0.05))) {
+      const roles: ColRole[] = new Array(nCols).fill('skip');
+      roles[i] = 'qty';
+      roles[j] = 'price';
+      return roles;
+    }
+  }
+  return undefined;
+}
+
+/** «117 / 105,3» (цена без скидки и со скидкой) → одно слово «105,3» на месте всей пары */
+function mergeSlashPrices(words: Word[]): Word[] {
+  const num = (w?: Word) => !!w && /^\d[\d.,]*$/.test(w.text.replace(/[^\d.,/]/g, '').replace(/[.,]+$/, ''));
+  const out: Word[] = [];
+  const join = (a: Word, b: Word, text: string): Word => ({ ...a, text, x0: Math.min(a.x0, b.x0), x1: Math.max(a.x1, b.x1), cx: (Math.min(a.x0, b.x0) + Math.max(a.x1, b.x1)) / 2 });
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i], prev = out[out.length - 1], next = words[i + 1];
+    const same = (o?: Word) => !!o && o.line === w.line;
+    const t = w.text.replace(/[^\d.,/]/g, '');
+    if (/^\d[\d.,]*\/\d[\d.,]*$/.test(t)) out.push({ ...w, text: t.split('/')[1] });
+    else if (t === '/' && same(prev) && num(prev) && same(next) && num(next)) { out[out.length - 1] = join(prev, next, next.text); i++; }
+    else if (/^\/\d[\d.,]*$/.test(t) && same(prev) && num(prev)) out[out.length - 1] = join(prev, w, t.slice(1));
+    else if (/^\d[\d.,]*\/$/.test(t) && same(next) && num(next)) { out.push(join(w, next, next.text)); i++; }
+    else out.push(w);
+  }
+  return out;
+}
+
+/**
  * Общий анализ страницы — нужен и для плана второго прохода, и для разбора.
  * stripCodes — коды из второго прохода: уточняют прочтение и добавляют пропущенные строки.
  */
 function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code: string }[] = []) {
   // копейки через дефис («350-00») читаем как обычные «350,00»
-  const words = opts.dashDecimals
+  let words = opts.dashDecimals
     ? flattenWords(page).map((w) => ({ ...w, text: w.text.replace(/(\d)-(\d\d)(?!\d)/, '$1,$2') }))
     : flattenWords(page);
+  if (opts.slashPrice) words = mergeSlashPrices(words);
   const lineH = typicalLineHeight(words, page);
   const cellGap = lineH * 0.7;
   let anchors = opts.code === 'none' ? findNumericAnchors(page, words, lineH) : findCodeAnchors(words, opts, lineH);
@@ -427,7 +466,9 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
   if (!anchors.length) return empty;
 
   // «Итого» ограничивает таблицу снизу (для накладных без кодов в столбце чисел есть и строка итога)
-  const totalsWord = findTotalsWord(words, anchors[0].cy + lineH * 0.3);
+  // Штрихкод картинкой OCR иногда читает как «ИТОГО» (ФудМастер): «Итого», под которым строк больше, чем над ним, — не итог
+  const totalsWord = findTotalsWords(words, anchors[0].cy + lineH * 0.3).find((t) =>
+    anchors.filter((x) => x.cy > t.cy + lineH).length <= anchors.filter((x) => x.cy < t.cy - lineH * 0.4).length);
   if (totalsWord) anchors = anchors.filter((a) => a.cy < totalsWord.cy - lineH * 0.4);
   if (!anchors.length) return { ...empty, anchors };
   const totalsWords = totalsWord ? words.filter((x) => Math.abs(x.cy - totalsWord.cy) < (totalsWord.y1 - totalsWord.y0) * 0.8 && x.x0 > totalsWord.x0) : undefined;
@@ -505,6 +546,7 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     const values = byCol.map((cs) => cs.map((c) => (c ? readAny(c.num!.num) : [])));
     // Столбцы, которые арифметика не различает («Кол-во» и «Приз» у Градус компани), — заданы для поставщика явно
     let roles = opts.columns && opts.columns.length === cols.length ? [...opts.columns] : detectRoles(values, cols.length);
+    roles ??= rolesByTotal(values, cols.length, totalsWords);
     if (!roles) {
       const n = Math.min(5, cols.length);
       roles = cols.map((_, i) => (i < cols.length - n ? 'skip' : LEGACY_ROLES[5 - n + (i - (cols.length - n))]));
@@ -513,8 +555,7 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     return { rows, pitch, bands, numbersLeft, rowCells, cols, roles, roleValues };
   };
 
-  let b = build(anchors);
-  if (opts.code === 'none') {
+  let b = build(anchors);  if (opts.code === 'none') {
     // Без кодов якорями могут оказаться шапка (нумерация столбцов, реквизиты) — оставляем строки,
     // где заполнены хотя бы два столбца с ролью, и пересчитываем столбцы уже по ним
     const keep = b.rows.filter((_, i) => b.roleValues[i] >= 2 && !isColumnNumbering(b.rowCells[i]));
@@ -761,6 +802,10 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
   if (opts.codeWrap) for (const anc of anchors) appendWrappedDigit(anc, words, lineH);
   const numsLeftEdge = cols.length ? Math.min(...cols.filter((_, ci) => roles[ci] !== 'skip').map((c) => c.x0)) : Infinity;
   const numsRightEdge = cols.length ? Math.max(...cols.filter((_, ci) => roles[ci] !== 'skip').map((c) => c.x1)) : Infinity;
+  // Левый край столбца наименований: с него начинаются строки «(н/ном:…» (левее — № строки и край соседнего листа)
+  const NOM_RE = /^[({]\S{1,3}\/\S{2,4}[:.]/;
+  const nomX = opts.barcodeInName ? words.filter((w) => NOM_RE.test(w.text) && w.cy > anchors[0].cy - a.pitch).map((w) => w.x0).sort((p, q) => p - q) : [];
+  const nameLeft = nomX.length >= 3 ? nomX[Math.floor(nomX.length * 0.2)] - lineH : -Infinity;
 
   anchors.forEach((anc, i) => {
     const cells = bandCells[i];
@@ -795,7 +840,25 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     // Наименование: слева от кода (З-2), справа от кода (упаковочные листы) или левее чисел (без кодов)
     const half = lineH * 0.2;
     let nameWords: Word[];
-    if (opts.code === 'none') {
+    let inName: { code: string; stripCode?: string } | undefined;
+    if (opts.barcodeInName) {
+      const ordered = bandWords.filter((w) => w.x1 < numsLeftEdge - lineH * 0.3 && w.x0 >= nameLeft).sort((p, q) => p.line - q.line || p.x0 - q.x0);
+      const digits = (w: Word) => fixDigits(w.text.replace(/^\W+|\W+$/g, '')).replace(/\D/g, '');
+      const isCode = (w: Word) => digits(w).length === 13 && /^\W*[\dOoОоЗзБбlI]{13}\W*$/.test(w.text) && !/^02/.test(digits(w));
+      const inline = ordered.filter(isCode).map(digits);
+      // столбец «Штрих-код»: 12 цифр и последняя цифра строкой ниже
+      const column = ordered.filter((w) => /^\W*\d{12}\W*$/.test(w.text)).map((w) => {
+        const col: Anchor = { cy: w.cy, x0: w.x0, x1: w.x1, code: digits(w) };
+        appendWrappedDigit(col, words, lineH);
+        return col.code;
+      }).filter((c) => c.length === 13);
+      const reads = [...inline, ...column];
+      const best = reads.find((c) => isValidEan(c)) ?? reads[0];
+      if (best) inName = { code: best, stripCode: reads.find((c) => c !== best) };
+      // наименование — всё до штрихкода, срока годности или «(н/ном:»
+      const cut = ordered.findIndex((w) => isCode(w) || NOM_RE.test(w.text) || /^\(?\d{2}[.,]\d{2}[.,]\d{4}\)?$/.test(w.text));
+      nameWords = cut >= 0 ? ordered.slice(0, cut) : ordered;
+    } else if (opts.code === 'none') {
       nameWords = bandWords.filter((w) => w.x1 < numsLeftEdge - lineH * 0.3 && !unitWords.has(w));
     } else if (opts.nameSide === 'right') {
       nameWords = bandWords.filter((w) => w.x0 > anc.x1 + half && w.x1 < numsLeftEdge - lineH * 0.3 && !unitWords.has(w));
@@ -853,6 +916,10 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     };
     if (opts.code !== 'none' && (anc.code || anc.stripCode)) applyCode(item, anc, opts);
     else if (opts.code !== 'none') item.issues.push(issue('warn', 'Код строки не прочитан — строка найдена по ценам, введите штрихкод по фото'));
+    if (inName) {
+      applyCode(item, { cy: anc.cy, x0: anc.x0, x1: anc.x1, ...inName }, { ...opts, code: 'ean' });
+      item.unit = 'шт';
+    } else if (opts.barcodeInName) item.issues.push(issue('warn', 'Штрихкод в наименовании не прочитан — введите его по фото'));
     // Штрихкод в последнем столбце, правее сумм (Градус компани): строки найдены по суммам, штрихкод берём из строки
     if (opts.barcodeRight) {
       const b = numBands[i];
@@ -899,7 +966,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     }
   }
 
-  if (opts.code === 'ean') repairByNeighbors(doc.items);
+  if (opts.code === 'ean' || opts.barcodeInName) repairByNeighbors(doc.items);
 
   // Единица не прочитана: дробное количество — кг; иначе единица всей накладной, если она одна,
   // или соседних строк (товары обычно сгруппированы: весовые подряд, штучные подряд)

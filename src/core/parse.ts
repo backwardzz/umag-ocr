@@ -101,8 +101,12 @@ export function parseDocument(page: OcrPage): ParsedDoc {
   }
   if (doc.format === 'z2' && (!doc.number || !doc.date)) {
     const nd = findNumberAndDate(page);
-    doc.number ??= nd.number;
-    doc.date ??= nd.date;
+    // Дата из будущего — это срок годности из наименования («(29.01.2027)»), а не дата накладной; номер рядом с ней тоже не тот
+    const [d, m, y] = (nd.date ?? '').split('.').map(Number);
+    if (!(y && m >= 1 && m <= 12 && new Date(y, m - 1, d).getTime() > Date.now() + 2 * 86400000)) {
+      doc.number ??= nd.number;
+      doc.date ??= nd.date;
+    }
   }
   addTextTotals(doc, page);
   checkTotals(doc);
