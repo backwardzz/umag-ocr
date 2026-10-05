@@ -152,7 +152,7 @@ export function toGray(rgba: ArrayLike<number>, w: number, h: number, suppressCo
  * и заполняем дыры в ней (тёмные печати/таблицы внутри листа).
  * Возвращает функцию inside(x, y).
  */
-export function paperMask(g: Gray, block = 24, growth = { step: 0.92, floor: 0.5 }): (x: number, y: number) => boolean {
+export function paperMask(g: Gray, block = 24, growth = { step: 0.92, floor: 0.5 }, keepBorder = false): (x: number, y: number) => boolean {
   const bw = Math.ceil(g.w / block), bh = Math.ceil(g.h / block);
   // Средняя яркость блока и яркость бумаги в нём (70-й перцентиль — не зависит от плотности текста)
   const mean = new Float32Array(bw * bh);
@@ -203,7 +203,10 @@ export function paperMask(g: Gray, block = 24, growth = { step: 0.92, floor: 0.5
         if (q >= 0 && bright[q] && !base[q] && !seen[q]) { seen[q] = 1; comp.push(q); }
       }
     }
-    if (comp.length < bright.length * 0.025) for (const p of comp) bright[p] = 0;
+    // Полоса у самого края кадра — это сам лист, уходящий за кадр (к краю фото темнее из-за виньетирования):
+    // на ней часто стоит столбец «Сумма», стирать её нельзя
+    const atBorder = keepBorder && comp.some((p) => { const x = p % bw, y = (p - x) / bw; return x === 0 || y === 0 || x === bw - 1 || y === bh - 1; });
+    if (comp.length < bright.length * 0.025 && !atBorder) for (const p of comp) bright[p] = 0;
   }
   // крупнейшая связная область светлых блоков
   const label = new Int32Array(bw * bh).fill(-1);
@@ -592,6 +595,38 @@ export function despeckle(bin: Gray, maxArea: number): Gray {
     if (comp.length <= maxArea) for (const p of comp) d[p] = 255;
   }
   return { w, h, d };
+}
+
+/**
+ * Насколько текст похож на повёрнутый на 90°: отношение «изрезанности» профиля чёрных пикселей по столбцам
+ * к профилю по строкам. У обычного текста профиль по строкам — гребёнка (строка, пробел, строка), а по столбцам
+ * буквы разных строк усредняются; у лежащего на боку — наоборот. Больше 1 — похоже на повёрнутый.
+ */
+export function sidewaysScore(bin: Gray): number {
+  const rows = new Float64Array(bin.h), cols = new Float64Array(bin.w);
+  for (let y = 0; y < bin.h; y++) {
+    for (let x = 0; x < bin.w; x++) if (bin.d[y * bin.w + x] === 0) { rows[y]++; cols[x]++; }
+  }
+  const rough = (p: Float64Array) => {
+    let d = 0, s = 0;
+    for (let i = 1; i < p.length; i++) { d += Math.abs(p[i] - p[i - 1]); s += p[i]; }
+    return s ? d / s : 0;
+  };
+  const r = rough(rows);
+  return r ? rough(cols) / r : 0;
+}
+
+/** Поворот RGBA на 90° по часовой стрелке (cw) или против */
+export function rotate90(rgba: ArrayLike<number>, w: number, h: number, cw: boolean): { data: Uint8ClampedArray; width: number; height: number } {
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const nx = cw ? h - 1 - y : y, ny = cw ? x : w - 1 - x;
+      const s = (y * w + x) * 4, d = (ny * h + nx) * 4;
+      out[d] = rgba[s]; out[d + 1] = rgba[s + 1]; out[d + 2] = rgba[s + 2]; out[d + 3] = rgba[s + 3];
+    }
+  }
+  return { data: out, width: h, height: w };
 }
 
 /**

@@ -1,6 +1,6 @@
 import { isValidEan, round2, near } from '../core/numbers';
 import { itemMapCode, mapKey, supplierKey, type MapEntry, type MappingStore } from '../core/mapping';
-import { nameSimilarity, type CatalogIndex } from '../core/catalog';
+import { nameSimilarity, normalizeName, type CatalogIndex } from '../core/catalog';
 import { issue, sourceName, type Issue, type ParsedDoc, type ParsedItem } from '../core/types';
 import type { UnitRule } from '../core/export';
 
@@ -191,12 +191,32 @@ export function applyCatalog(doc: ParsedDoc, catalog?: CatalogIndex): ParsedDoc 
       changed = true;
       return { ...cur, ocrBarcode: cur.barcode, barcode: fix.barcode, barcodeSource: 'catalog' as const, catalogMatch: { name: fix.name, by: 'fix' as const } };
     }
-    if (cur.barcode || !catalog?.size || !cur.qty) return cur;
-    const m = catalog.match({ name: sourceName(cur), unit: cur.unit, supplier: doc.supplier, codes: [...(cur.extraCodes ?? []), ...(cur.code ? [cur.code] : [])] });
-    if (!m) return cur;
-    changed = true;
-    return { ...cur, barcode: m.item.barcode, barcodeSource: 'catalog' as const, catalogMatch: { name: m.item.name, by: m.by } };
+    return cur;
   });
+  if (!catalog?.size) return changed ? { ...doc, items } : doc;
+  // Строки без штрихкода: варианты из каталога для каждой, затем раздаём так, чтобы разные товары накладной
+  // не получили один штрихкод (три вкуса одного пива — не один товар): штрихкод достаётся строке, которой он
+  // подходит лучше всех, остальные берут свой следующий вариант или остаются пустыми
+  const open = items.map((it, i) => ({ i, it })).filter(({ it }) => !it.barcode && it.qty)
+    .map(({ i, it }) => ({
+      i, key: normalizeName(sourceName(it)),
+      opts: catalog.rank({ name: sourceName(it), unit: it.unit, supplier: doc.supplier, price: it.price, codes: [...(it.extraCodes ?? []), ...(it.code ? [it.code] : [])] }),
+    }));
+  // штрихкоды, уже занятые строками с кодом из накладной или справочника
+  const taken = new Map<string, string>();
+  for (const it of items) if (it.barcode) taken.set(catalog.get(it.barcode)?.barcode ?? it.barcode, '');
+  const pairs = open.flatMap((o) => o.opts.map((m, rank) => ({ o, m, rank }))).sort((a, b) => b.m.score - a.m.score || a.rank - b.rank);
+  const done = new Set<number>();
+  for (const { o, m } of pairs) {
+    if (done.has(o.i)) continue;
+    const owner = taken.get(m.item.barcode);
+    // одинаковые названия в накладной (бонусная строка того же товара) — один товар
+    if (owner !== undefined && owner !== o.key) continue;
+    taken.set(m.item.barcode, o.key);
+    done.add(o.i);
+    changed = true;
+    items[o.i] = { ...items[o.i], barcode: m.item.barcode, barcodeSource: 'catalog' as const, catalogMatch: { name: m.item.name, by: m.by } };
+  }
   return changed ? { ...doc, items } : doc;
 }
 

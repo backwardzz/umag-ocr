@@ -48,6 +48,8 @@ export interface Z2Options {
    * когда найдено ровно столько столбцов): 'qty' | 'qtyPlan' | 'price' | 'sum' | 'vat' | 'skip'
    */
   columns?: ('qty' | 'qtyPlan' | 'price' | 'sum' | 'vat' | 'skip')[];
+  /** Перед цифрами кода — буквенный префикс «УТ-» (Степная Логистическая): код строки — цифры после него */
+  codePrefix?: boolean;
   /** Цена напечатана парой «117 / 105,3» — без скидки и со скидкой: берётся вторая (с ней сходится «Сумма со скидкой») */
   slashPrice?: boolean;
   /**
@@ -159,6 +161,38 @@ export const SUPPLIERS: SupplierDef[] = [
     keywords: [/Табыс\s*2040/i, /БезСкидки|СоСкидкой/i],
     parser: 'z2',
     z2: { code: 'none', nameDir: 'up', slashPrice: true, barcodeInName: true },
+  },
+  {
+    // Тот же бланк OnlineDuken, что у Табыс: штрихкод внутри наименования и в своём столбце (без переноса),
+    // одна цена, числа по центру высокой строки; бонусная строка по 1 ₸ без штрихкода.
+    // Стоит выше Евразиан («NTIN:» в каждом наименовании)
+    id: 'zhalyn',
+    goods: 'Choco Pie, лапша, масло, сгущёнка',
+    name: 'ИП "Жалын"',
+    bins: [],
+    keywords: [/Жалын/i, /номенклатур\.\s*номер/i],
+    parser: 'z2',
+    z2: { code: 'none', nameDir: 'nearest', barcodeInName: true },
+  },
+  {
+    // Короткая накладная «№ АКХ…»: №, Код (= штрихкод), Наименование товара (справа), Цена за уп., Цена, Кол-во, Ед., Сумма с НДС
+    id: 'russkaya-kartoshka',
+    goods: 'чипсы «Русская картошка»',
+    name: 'Поставщик «Русская картошка»',
+    bins: [],
+    keywords: [/Русская\s+картошка/i],
+    parser: 'z2',
+    z2: { code: 'ean', nameDir: 'nearest', nameSide: 'right' },
+  },
+  {
+    // Сигареты Chapman: номенклатурный номер «УТ-00000349» (штрихкод запоминается по нему), количество в пачках
+    id: 'stepnaya-logistic',
+    goods: 'сигареты Chapman',
+    name: 'ТОО "Степная Логистическая Компания"',
+    bins: ['160740008913'],
+    keywords: [/Степная\s+Логист/i, /Chapman\s+(?:Brown|Green|Red)/i],
+    parser: 'z2',
+    z2: { code: 'digits', codeLength: 8, nameDir: 'nearest', codePrefix: true },
   },
   {
     // Соки DaDa, Gracio: Код ТНВЭД, Штрих код, два наименования справа от него (по декларации и рабочее),

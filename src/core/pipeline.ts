@@ -38,13 +38,35 @@ function shiftLines(lines: OcrLine[], dx: number, dy: number): OcrLine[] {
   }));
 }
 
+/** Сколько слов прочитано уверенно (кириллица от 4 букв): у фото, лежащего на боку, таких почти нет */
+export function textQuality(lines: OcrLine[]): number {
+  let n = 0;
+  for (const l of lines) for (const w of l.words) if (w.conf >= 70 && /[А-Яа-яЁё]{4,}/.test(w.text)) n++;
+  return n;
+}
+
+type PageExtra = Pick<OcrPage, 'rules' | 'charHeight'>;
+/** Предобработанное фото, повёрнутое на 90° по часовой стрелке (cw) или против */
+export type Rotated = (cw: boolean) => Promise<{ image: Gray; extra: PageExtra }>;
+
 export async function recognizePage(
   image: Gray,
-  extra: Pick<OcrPage, 'rules' | 'charHeight'>,
+  extra: PageExtra,
   recognize: Recognizer,
   onStage?: (stage: string, fraction: number) => void,
-): Promise<{ page: OcrPage; doc: ParsedDoc }> {
-  const lines = await recognize(image, {});
+  rotated?: Rotated,
+): Promise<{ page: OcrPage; doc: ParsedDoc; image: Gray }> {
+  let lines = await recognize(image, {});
+  // Фото снято боком (EXIF об этом молчит): текста почти не найдено — пробуем оба поворота и берём лучший
+  const q0 = textQuality(lines);
+  if (rotated && q0 < 8) {
+    for (const cw of [true, false]) {
+      onStage?.('Фото повёрнуто — пробуем развернуть', 0);
+      const cand = await rotated(cw);
+      const l = await recognize(cand.image, {});
+      if (textQuality(l) >= Math.max(10, q0 * 3, textQuality(lines) + 1)) { image = cand.image; extra = cand.extra; lines = l; }
+    }
+  }
   const page: OcrPage = { width: image.w, height: image.h, lines: [...lines].sort((a, b) => a.y0 - b.y0), ...extra };
   const plan = planStrips(page);
   if (plan.length) {
@@ -59,5 +81,5 @@ export async function recognizePage(
     }
     page.strips = strips;
   }
-  return { page, doc: parseDocument(page) };
+  return { page, doc: parseDocument(page), image };
 }

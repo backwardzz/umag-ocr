@@ -130,6 +130,12 @@ function addTextTotals(doc: ParsedDoc, page: OcrPage) {
       const toks = extractNumbers(fixDigits(page.lines[i - 1].text.replace(/[`'’‘"“”„°|\]\[‚]/g, ' ')));
       if (toks.length <= 2) for (const tok of toks) if (tok.hasDecimals && tok.value >= 1) found.push(tok.value);
     }
+    // сам итог не прочитан (стёрт у края фото), а «В том числе НДС: 1 529,37» есть — итог = НДС × 116/16
+    const vat = l.text.match(/в\s+том\s+числе.{0,12}[НH][ДA][СC]\D{0,60}(\d[\d ]*[.,]\d{2})/i);
+    if (vat) {
+      const t = (Number(vat[1].replace(/ /g, '').replace(',', '.')) * 116) / 16;
+      found.push(Math.abs(t - Math.round(t)) < 0.1 ? Math.round(t) : round2(t));
+    }
     // «…, на сумму 6 100 тенге» — сумма без копеек (итог жирным над ней OCR мог не прочитать)
     const whole = l.text.match(/на\s+сумму\s+(\d[\d ]*\d)\s*(?:тенге|тг|kzt)/i);
     if (whole) found.push(Number(whole[1].replace(/ /g, '')));

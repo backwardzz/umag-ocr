@@ -310,32 +310,40 @@ export class CatalogIndex {
     return s;
   }
 
+  /** Несколько самых вероятных товаров (с разными штрихкодами), от лучшего к худшему: найденный по коду — единственный */
+  rank(query: CatalogQuery, limit = 5): CatalogMatch[] {
+    for (const c of query.codes ?? []) {
+      const item = this.byCode(c);
+      if (item) return [{ item, score: 1, by: 'code', confidence: 'high' }];
+    }
+    const q = { tri: trigrams(normalizeName(query.name)), words: toWords(query.name), sizes: sizesOf(query.name), unit: query.unit, supplier: query.supplier, price: query.price };
+    if (!q.words.length || q.tri.size < 4) return [];
+    // Кандидаты — товары с общим началом слова (с опечатками в первых буквах не найдём, это приемлемо)
+    const cands = new Set<Entry>();
+    for (const w of q.words) for (const e of this.byKey.get(keyOf(w.w)) ?? []) cands.add(e);
+    // лучшие товары с разными штрихкодами (дубли одного товара не мешают)
+    const top: { e: Entry; sc: number }[] = [];
+    for (const e of cands) {
+      const sc = this.score(q, e);
+      // совсем непохожее не подставляем: хотя бы одно слово должно совпасть по существу
+      if (sc < 0.3) continue;
+      const same = top.findIndex((t) => t.e.item.barcode === e.item.barcode);
+      if (same >= 0) { if (sc > top[same].sc) top[same] = { e, sc }; } else top.push({ e, sc });
+    }
+    top.sort((a, b) => b.sc - a.sc);
+    return top.slice(0, limit).map((t, i) => {
+      const margin = t.sc - (top[i + 1]?.sc ?? 0);
+      const confidence: MatchConfidence = t.sc >= 0.75 && margin >= 0.05 ? 'high' : t.sc >= 0.5 && margin >= 0.02 ? 'medium' : 'low';
+      return { item: t.e.item, score: t.sc, by: 'name' as const, confidence };
+    });
+  }
+
   /**
    * Самый вероятный товар каталога для строки накладной без штрихкода: сначала по кодам (NTIN),
    * затем по названию. Возвращается лучший вариант, даже неуверенный, — пользователь проверяет сам;
    * confidence подсказывает, насколько ему верить.
    */
   match(query: CatalogQuery): CatalogMatch | undefined {
-    for (const c of query.codes ?? []) {
-      const item = this.byCode(c);
-      if (item) return { item, score: 1, by: 'code', confidence: 'high' };
-    }
-    const q = { tri: trigrams(normalizeName(query.name)), words: toWords(query.name), sizes: sizesOf(query.name), unit: query.unit, supplier: query.supplier, price: query.price };
-    if (!q.words.length || q.tri.size < 4) return undefined;
-    // Кандидаты — товары с общим началом слова (с опечатками в первых буквах не найдём, это приемлемо)
-    const cands = new Set<Entry>();
-    for (const w of q.words) for (const e of this.byKey.get(keyOf(w.w)) ?? []) cands.add(e);
-    let best: Entry | undefined, bestScore = 0, second = 0;
-    for (const e of cands) {
-      const sc = this.score(q, e);
-      // второй — лучший из товаров с другим штрихкодом (дубли одного товара не мешают)
-      if (sc > bestScore) { if (best && best.item.barcode !== e.item.barcode) second = bestScore; bestScore = sc; best = e; }
-      else if (sc > second && e.item.barcode !== best?.item.barcode) second = sc;
-    }
-    // совсем непохожее не подставляем: хотя бы одно слово должно совпасть по существу
-    if (!best || bestScore < 0.3) return undefined;
-    const margin = bestScore - second;
-    const confidence: MatchConfidence = bestScore >= 0.75 && margin >= 0.05 ? 'high' : bestScore >= 0.5 && margin >= 0.02 ? 'medium' : 'low';
-    return { item: best.item, score: bestScore, by: 'name', confidence };
+    return this.rank(query, 1)[0];
   }
 }

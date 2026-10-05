@@ -9,7 +9,7 @@ import path from 'node:path';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 import { createWorker, PSM } from 'tesseract.js';
-import { preprocess, grayToRGBA, type Gray } from '../src/core/image';
+import { preprocess, grayToRGBA, rotate90, type Gray } from '../src/core/image';
 import { toOcrPage } from '../src/core/ocrTypes';
 import { recognizePage, type Recognizer } from '../src/core/pipeline';
 import { printDoc } from './print';
@@ -105,7 +105,12 @@ for (const file of files) {
   const t1 = Date.now();
   const base = path.basename(file).replace(/\.\w+$/, '');
   fs.writeFileSync(path.join('out', `${base}.pre.png`), toPng(pre.image));
-  const { page, doc } = await recognizePage(pre.image, { rules: pre.rules, charHeight: pre.charHeight * pre.scale }, recognize);
+  const { page, doc, image } = await recognizePage(pre.image, { rules: pre.rules, charHeight: pre.charHeight * pre.scale }, recognize, undefined, async (cw) => {
+    const r = rotate90(img.data, img.width, img.height, cw);
+    const p = preprocess(r.data, r.width, r.height);
+    return { image: p.image, extra: { rules: p.rules, charHeight: p.charHeight * p.scale } };
+  });
+  if (image !== pre.image) fs.writeFileSync(path.join('out', `${base}.pre.png`), toPng(image));
   const t2 = Date.now();
   fs.writeFileSync(file.replace(/\.\w+$/, '.ocr.json'), JSON.stringify(page, null, 1));
   console.log(`===== ${file}: pre ${t1 - t0}ms (char ${pre.charHeight}px, scale ${pre.scale.toFixed(2)}), ocr ${t2 - t1}ms, strips ${page.strips?.length ?? 0}`);

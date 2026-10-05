@@ -68,16 +68,23 @@ function preprocessInWorker(img: ImageData): Promise<PreprocessResponse> {
 }
 
 /** Декодирует фото с учётом EXIF-поворота и уменьшает слишком большие */
-export async function loadImageData(file: Blob): Promise<ImageData> {
+export async function loadImageData(file: Blob, quarterTurns: -1 | 0 | 1 = 0): Promise<ImageData> {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
   const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
   const w = Math.round(bmp.width * k), h = Math.round(bmp.height * k);
-  const canvas = new OffscreenCanvas(w, h);
+  // quarterTurns: фото снято боком — поворачиваем на 90° по часовой (1) или против (-1)
+  const cw = quarterTurns ? h : w, ch = quarterTurns ? w : h;
+  const canvas = new OffscreenCanvas(cw, ch);
   const ctx = canvas.getContext('2d')!;
   ctx.imageSmoothingQuality = 'high';
+  if (quarterTurns) {
+    ctx.translate(cw / 2, ch / 2);
+    ctx.rotate((quarterTurns * Math.PI) / 2);
+    ctx.translate(-w / 2, -h / 2);
+  }
   ctx.drawImage(bmp, 0, 0, w, h);
   bmp.close();
-  return ctx.getImageData(0, 0, w, h);
+  return ctx.getImageData(0, 0, cw, ch);
 }
 
 function grayToPng(g: Gray): Promise<Blob> {
@@ -136,14 +143,26 @@ export function recognizeInvoice(file: Blob, onProgress: Progress, signal?: Abor
         pass++;
         return toOcrPage(data, g.w, g.h).lines;
       };
-      const { page, doc } = await recognizePage(image, { rules: pre.rules, charHeight: pre.charHeight }, recognize,
-        (stage, f) => { if (!signal?.aborted) onProgress(stage, 0.7 + f * 0.28); });
+      const toGrayImage = (p: PreprocessResponse): Gray => {
+        const g: Gray = { w: p.width, h: p.height, d: new Uint8ClampedArray(p.width * p.height) };
+        for (let i = 0; i < g.d.length; i++) g.d[i] = p.rgba[i * 4];
+        return g;
+      };
+      const { page, doc, image: used } = await recognizePage(image, { rules: pre.rules, charHeight: pre.charHeight }, recognize,
+        (stage, f) => { if (!signal?.aborted) onProgress(stage, 0.7 + f * 0.28); },
+        async (cw) => {
+          pass = 0;
+          const p = await preprocessInWorker(await loadImageData(file, cw ? 1 : -1));
+          check();
+          return { image: toGrayImage(p), extra: { rules: p.rules, charHeight: p.charHeight } };
+        });
+      const shownPng = used === image ? processedPng : await grayToPng(used);
       if (import.meta.env.DEV) {
         const g = globalThis as Record<string, unknown>;
         g.__ocrPages = [...((g.__ocrPages as OcrPage[] | undefined) ?? []), page];
       }
       onProgress('Готово', 1);
-      return { page, doc, processedUrl: URL.createObjectURL(processedPng) };
+      return { page, doc, processedUrl: URL.createObjectURL(shownPng) };
     } finally {
       if (!signal?.aborted) onTessProgress = null;
     }

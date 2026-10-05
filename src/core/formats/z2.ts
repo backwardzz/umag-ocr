@@ -154,7 +154,8 @@ function dedupeByY<T extends { cy: number }>(list: T[], lineH: number): T[] {
 function findCodeAnchors(words: Word[], opts: Z2Options, lineH: number): Anchor[] {
   const cands: Anchor[] = [];
   for (const w of words) {
-    const code = cleanCode(w.text);
+    // «УТ-00000349»: OCR читает префикс и как «YT-», «¥YT-»
+    const code = cleanCode(opts.codePrefix ? w.text.replace(/^\W*[УуYy¥]{1,2}[ТтTt]\s*[-—–]?\s*(?=\d)/, '') : w.text);
     if (code && codeFits(code, opts)) cands.push({ word: w, code, cy: w.cy, x0: w.x0, x1: w.x1 });
   }
   if (opts.nameSide === 'inline') {
@@ -558,9 +559,33 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     const sumCol = roles ? roles.indexOf('sum') : -1;
     const sparse = sumCol >= 0 && values.filter((r) => r[sumCol].length).length < values.length * 0.5;
     if (!roles || sparse) roles = rolesByTotal(values, cols.length, totalsWords) ?? roles;
+    // Арифметика не сошлась ни в одной строке и столбцов мало — суммы не попали в кадр
+    // (или стёрлись у края фото). Цену узнаём по копейкам, количество — целые числа в соседнем столбце
+    if (!roles && cols.length >= 2 && cols.length <= 4) {
+      const share = (ci: number, re: RegExp) => byCol.filter((cs) => cs[ci] && re.test(cs[ci]!.num!.num.trim())).length / byCol.length;
+      const money = cols.map((_, ci) => share(ci, /\d[.,]\d{2}$/) >= 0.6), whole = cols.map((_, ci) => share(ci, /^\d{1,4}$/) >= 0.6);
+      const pi = money.lastIndexOf(true);
+      const qi = pi < 0 ? -1 : whole[pi + 1] ? pi + 1 : whole[pi - 1] ? pi - 1 : -1;
+      if (qi >= 0) {
+        roles = cols.map(() => 'skip');
+        roles[pi] = 'price';
+        roles[qi] = 'qty';
+        if (qi < pi && whole[qi - 1]) roles[qi - 1] = 'qtyPlan';
+      }
+    }
     if (!roles) {
       const n = Math.min(5, cols.length);
       roles = cols.map((_, i) => (i < cols.length - n ? 'skip' : LEGACY_ROLES[5 - n + (i - (cols.length - n))]));
+    }
+    // Цена напечатана левее количества («Цена 377,00 · Кол-во 4», Русская картошка): арифметика их не различает,
+    // а по виду — у цены копейки, у количества их нет
+    const qi = roles.indexOf('qty'), pi = roles.indexOf('price');
+    if (qi >= 0 && pi > qi && !opts.columns) {
+      const money = (c?: Cell) => !!c && /\d[.,]\d{2}$/.test(c.num!.num.trim());
+      const whole = (c?: Cell) => !!c && /^\d{1,4}$/.test(c.num!.num.trim());
+      const swapped = byCol.filter((cs) => money(cs[qi]) && whole(cs[pi])).length;
+      const normal = byCol.filter((cs) => money(cs[pi]) || !whole(cs[pi])).length;
+      if (swapped >= Math.max(2, byCol.length * 0.6) && normal === 0) { roles[qi] = 'price'; roles[pi] = 'qty'; }
     }
     const roleValues = byCol.map((cs) => cs.filter((c, ci) => c && roles![ci] !== 'skip').length);
     return { rows, pitch, bands, numbersLeft, rowCells, cols, roles, roleValues };
@@ -815,8 +840,9 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
   const numsRightEdge = cols.length ? Math.max(...cols.filter((_, ci) => roles[ci] !== 'skip').map((c) => c.x1)) : Infinity;
   // Левый край столбца наименований: с него начинаются строки «(н/ном:…» (левее — № строки и край соседнего листа)
   const NOM_RE = /^[({]\S{1,3}\/\S{2,4}[:.]/;
-  const nomX = opts.barcodeInName ? words.filter((w) => NOM_RE.test(w.text) && w.cy > anchors[0].cy - a.pitch).map((w) => w.x0).sort((p, q) => p - q) : [];
-  const nameLeft = nomX.length >= 3 ? nomX[Math.floor(nomX.length * 0.2)] - lineH : -Infinity;
+  // (и «NTIN: …» — у части бланков «(н/ном:» стоит в середине строки, а с начала строки идёт NTIN)
+  const nomX = opts.barcodeInName ? words.filter((w) => (NOM_RE.test(w.text) || /^NTIN:?$/i.test(w.text)) && w.cy > anchors[0].cy - a.pitch).map((w) => w.x0).sort((p, q) => p - q) : [];
+  const nameLeft = nomX.length >= 3 ? nomX[Math.floor(nomX.length * 0.05)] - lineH : -Infinity;
 
   anchors.forEach((anc, i) => {
     const cells = bandCells[i];
