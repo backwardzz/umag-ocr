@@ -389,10 +389,17 @@ function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
 function rolesByTotal(rows: number[][][], nCols: number, totalsWords?: Word[]): ColRole[] | undefined {
   if (!totalsWords || rows.length < 2) return undefined;
   const totals = extractNumbers(fixDigits(totalsWords.map((w) => w.text).join(' ').replace(JUNK_RE, ' '))).filter((t) => t.hasDecimals).map((t) => t.value);
+  if (!totals.length) return undefined;
   for (let i = 0; i < nCols; i++) for (let j = i + 1; j < nCols; j++) {
     if (!rows.every((r) => r[i].length && r[j].length)) continue;
-    const sum = round2(rows.reduce((acc, r) => acc + r[i][0] * r[j][0], 0));
-    if (sum > 0 && totals.some((t) => near(t, sum, 0.05))) {
+    // у каждой строки — несколько прочтений («22500» — это и 225,00): ищем сочетание, дающее итог
+    let reach = new Set<number>([0]);
+    for (const r of rows) {
+      const next = new Set<number>();
+      for (const s of reach) for (const q of r[i]) for (const p of r[j]) if (q > 0 && p > 0 && next.size < 5000) next.add(round2(s + q * p));
+      reach = next;
+    }
+    if ([...reach].some((sum) => totals.some((t) => near(t, sum, 0.05)))) {
       const roles: ColRole[] = new Array(nCols).fill('skip');
       roles[i] = 'qty';
       roles[j] = 'price';
@@ -546,7 +553,11 @@ function analyze(page: OcrPage, opts: Z2Options, stripCodes: { cy: number; code:
     const values = byCol.map((cs) => cs.map((c) => (c ? readAny(c.num!.num) : [])));
     // Столбцы, которые арифметика не различает («Кол-во» и «Приз» у Градус компани), — заданы для поставщика явно
     let roles = opts.columns && opts.columns.length === cols.length ? [...opts.columns] : detectRoles(values, cols.length);
-    roles ??= rolesByTotal(values, cols.length, totalsWords);
+    // Столбец «сумм» найден по одной-двум строкам, а в остальных пуст (сумма у края фото не прочиталась,
+    // уцелел обрывок) — надёжнее количество и цена, сходящиеся с «Итого»
+    const sumCol = roles ? roles.indexOf('sum') : -1;
+    const sparse = sumCol >= 0 && values.filter((r) => r[sumCol].length).length < values.length * 0.5;
+    if (!roles || sparse) roles = rolesByTotal(values, cols.length, totalsWords) ?? roles;
     if (!roles) {
       const n = Math.min(5, cols.length);
       roles = cols.map((_, i) => (i < cols.length - n ? 'skip' : LEGACY_ROLES[5 - n + (i - (cols.length - n))]));
@@ -1019,7 +1030,9 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     const pool = [...sumC, ...looseC, ...lineNums];
     const sum = [...sumC, ...looseC].find((x) => near(x, rowsSum, tol))
       ?? pool.find((x) => plausible(x) && vatOk(x))
-      ?? sumC.find(plausible);
+      ?? sumC.find(plausible)
+      // без столбца сумм итог берём из строки «Итого» как есть: по нему сверка найдёт строку с потерянной запятой («22500» = 225,00)
+      ?? (!usedRoles.includes('sum') && totalsWords ? looseC.find((x) => x >= 1) : undefined);
     doc.totals = {
       qty: qtyC[0],
       sum,
