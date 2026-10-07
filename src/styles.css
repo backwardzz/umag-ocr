@@ -1,4 +1,4 @@
-/* Палитра и формы как в Sauda: индиго-акцент, светлая тема, Inter */
+/* Палитра и формы как в Sauda (D:saudasrcstyles.css): индиго-акцент, Inter. Тема — атрибут data-theme на <html>, см. src/app/theme.ts */
 :root {
   --bg: #f3f4f8;
   --surface: #ffffff;
@@ -20,8 +20,41 @@
   --focus: #4b45e0;
   --shadow: 0 1px 2px rgba(20, 24, 40, 0.06), 0 4px 16px rgba(20, 24, 40, 0.06);
   --radius: 8px;
+  --backdrop: rgba(20, 24, 40, 0.45);
+  --modal-shadow: 0 20px 60px rgba(20, 24, 40, 0.3);
+  --hover: rgba(20, 24, 40, 0.06);
+  --seg-bg: #e7e9f1;
+  --tip-bg: #1f2433;
   --mono: ui-monospace, 'Cascadia Mono', 'Consolas', 'SF Mono', monospace;
   color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #11131a;
+  --surface: #1a1d27;
+  --surface-2: #222633;
+  --border: #2b2f3e;
+  --border-strong: #3a3f52;
+  --text: #e5e7ef;
+  --muted: #9298ab;
+  --primary: #7c76ff;
+  --primary-hover: #918cff;
+  --primary-soft: #272650;
+  --ok: #4cc69a;
+  --ok-soft: #16332a;
+  --warn: #e7ae4f;
+  --warn-strong: #e7ae4f;
+  --warn-soft: #382c16;
+  --err: #f0847b;
+  --err-soft: #3a1f22;
+  --focus: #7c76ff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --modal-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  --hover: rgba(255, 255, 255, 0.06);
+  --seg-bg: #12141b;
+  --tip-bg: #2e3345;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -33,11 +66,13 @@ body {
   font: 14px/1.45 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-h1, h2, h3 { line-height: 1.2; margin: 0 0 8px; }
-h1 { font-size: 26px; }
-h2 { font-size: 18px; }
-h3 { font-size: 15px; margin-top: 20px; }
-button, input { font: inherit; color: inherit; }
+h1, h2, h3 { line-height: 1.25; margin: 0 0 8px; font-weight: 650; }
+h1 { font-size: 20px; }
+h2 { font-size: 16px; }
+h3 { font-size: 14px; margin-top: 18px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
@@ -54,6 +89,8 @@ button, input { font: inherit; color: inherit; }
   transition: background 0.15s, border-color 0.15s;
 }
 .btn:hover { background: var(--surface-2); border-color: var(--muted); }
+a.btn { color: var(--text); }
+a.btn:hover { text-decoration: none; }
 .btn--primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
 .btn--primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .btn--ghost { background: transparent; border-color: transparent; }
@@ -62,30 +99,34 @@ button, input { font: inherit; color: inherit; }
   display: inline-grid; place-items: center; width: 32px; height: 32px;
   border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer;
 }
-.icon-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .row-btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
-.seg button { border: 0; background: transparent; padding: 6px 12px; cursor: pointer; color: var(--muted); }
-.seg button + button { border-left: 1px solid var(--border); }
-.seg button.is-on { background: var(--primary-soft); color: var(--text); font-weight: 600; }
+.seg { display: inline-flex; max-width: 100%; padding: 2px; border-radius: 7px; background: var(--seg-bg); }
+.seg button { height: 30px; padding: 0 12px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.seg button:hover:not(:disabled):not(.is-on) { color: var(--text); }
+.seg button.is-on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(20, 24, 40, 0.12); }
 .seg button:disabled { opacity: 0.4; cursor: default; }
 
 /* ---------- каркас ---------- */
 .app { display: flex; flex-direction: column; height: 100%; }
 .topbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; align-items: center; gap: 4px;
   height: 52px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 5;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+.brand { display: flex; align-items: center; gap: 8px; margin-right: 14px; font-weight: 700; font-size: 16px; color: var(--text); white-space: nowrap; }
+a.brand:hover { text-decoration: none; }
+.brand__section { padding-left: 10px; margin-left: 2px; border-left: 1px solid var(--border); font-weight: 600; color: var(--muted); }
 .brand__mark {
   display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
   background: var(--primary); color: #fff; font-size: 15px; font-weight: 700;
 }
-.brand__arrow { color: var(--primary); }
-.topbar__nav { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.topbar__nav { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.topbar__nav .btn--ghost, .topbar__end .btn--ghost { height: 34px; min-height: 0; padding: 0 10px; border: 0; font-weight: 500; }
+.topbar__nav .btn--ghost:hover, .topbar__end .btn--ghost:hover { background: var(--surface-2); }
+.topbar__end { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 
 .layout { flex: 1; display: grid; grid-template-columns: 270px 1fr; min-height: 0; }
 .sidebar { border-right: 1px solid var(--border); background: var(--surface); padding: 12px; overflow: auto; }
@@ -99,7 +140,7 @@ button, input { font: inherit; color: inherit; }
 
 /* ---------- загрузка ---------- */
 .upload {
-  border: 2px dashed var(--border-strong); border-radius: 14px; background: var(--surface);
+  border: 2px dashed var(--border-strong); border-radius: 12px; background: var(--surface);
   padding: 32px 16px; display: grid; gap: 10px; justify-items: center; text-align: center;
   transition: border-color 0.15s, background 0.15s;
 }
@@ -197,7 +238,7 @@ button, input { font: inherit; color: inherit; }
   position: absolute; left: 10px; top: 10px; padding: 2px 8px; border-radius: 6px; pointer-events: none;
   font-size: 11.5px; color: var(--muted); background: color-mix(in srgb, var(--surface) 85%, transparent);
 }
-.pv-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(10, 12, 10, 0.92); }
+.pv-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(12, 14, 22, 0.92); }
 .pv--full .pv__tools { right: 16px; bottom: 16px; }
 
 .items-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
@@ -304,7 +345,7 @@ button, input { font: inherit; color: inherit; }
 .add-row { margin: 8px; }
 
 /* ---------- панели ---------- */
-.drawer-backdrop { position: fixed; inset: 0; background: rgba(10, 15, 10, 0.35); z-index: 20; display: flex; justify-content: flex-end; }
+.drawer-backdrop { position: fixed; inset: 0; background: var(--backdrop); z-index: 20; display: flex; justify-content: flex-end; }
 .drawer {
   width: min(520px, 100%); height: 100%; background: var(--surface); box-shadow: var(--shadow);
   display: flex; flex-direction: column;
@@ -315,7 +356,7 @@ button, input { font: inherit; color: inherit; }
 .drawer .seg button { padding: 6px 10px; font-size: 13px; }
 .modal {
   margin: auto; width: min(640px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto;
-  background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); padding-bottom: 16px;
+  background: var(--surface); border-radius: 12px; box-shadow: var(--modal-shadow); padding-bottom: 16px;
 }
 .modal > :not(.drawer__head) { padding-left: 20px; padding-right: 20px; }
 .modal ul { padding-left: 38px; }
@@ -336,7 +377,7 @@ button, input { font: inherit; color: inherit; }
 
 .toast {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30;
-  background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow);
+  background: var(--tip-bg); color: #fff; padding: 11px 14px; border-radius: 8px; box-shadow: var(--shadow);
   max-width: calc(100% - 32px);
 }
 

@@ -48,6 +48,11 @@ export function saudaBase(location: { href: string; hostname: string }, override
   return new URL('../sauda/', location.href).href;
 }
 
+/** Свой адрес Sauda из localStorage (umag-ocr.saudaUrl), если задан. */
+export function saudaOverride(): string | null {
+  try { return localStorage.getItem('umag-ocr.saudaUrl'); } catch { return null; /* приватный режим */ }
+}
+
 export function saudaLink(base: string, doc: ParsedDoc, settings: ExportSettings): string {
   return `${base}#/invoice?d=${encodeSaudaInvoice(saudaInvoice(doc, settings))}`;
 }

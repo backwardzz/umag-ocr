@@ -6,7 +6,7 @@ import { approveAll, summarize, money, qtyFmt, type BulkOp, type DocEntry } from
 import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
-import { saudaBase, saudaLink } from '../core/sauda';
+import { saudaBase, saudaLink, saudaOverride } from '../core/sauda';
 import { downloadBlob, copyText } from './storage';
 import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh, IconX } from './Icons';
 
@@ -132,9 +132,7 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   };
   const toSauda = () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего отправлять'); return; }
-    let override: string | null = null;
-    try { override = localStorage.getItem('umag-ocr.saudaUrl'); } catch { /* приватный режим */ }
-    window.open(saudaLink(saudaBase(window.location, override), doc, settings), '_blank', 'noopener');
+    window.open(saudaLink(saudaBase(window.location, saudaOverride()), doc, settings), '_blank', 'noopener');
   };
   const copy = async () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего копировать'); return; }

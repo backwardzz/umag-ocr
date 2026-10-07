@@ -15,14 +15,19 @@ import { DocList } from './app/DocList';
 import { DocView } from './app/DocView';
 import { SettingsDrawer } from './app/SettingsDrawer';
 import { HelpModal } from './app/HelpModal';
-import { IconBook, IconHelp, IconSettings } from './app/Icons';
+import { IconAutoTheme, IconBack, IconBook, IconHelp, IconMoon, IconSettings, IconSun } from './app/Icons';
 import { FormatsList, FORMATS_COUNT } from './app/FormatsList';
+import { THEME_LABEL, useTheme, type ThemePref } from './app/theme';
+import { saudaBase, saudaOverride } from './core/sauda';
+
+const NEXT_THEME: Record<ThemePref, ThemePref> = { auto: 'light', light: 'dark', dark: 'auto' };
 
 let seq = 0;
 const newId = () => `d${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 export default function App() {
   const [docs, setDocs] = useState<DocEntry[]>([]);
+  const [theme, setTheme] = useTheme();
   const [selected, setSelected] = useState<string>();
   const [settings, setSettingsState] = useState<ExportSettings>(loadSettings);
   const [mapping, setMappingState] = useState<MappingStore>(loadMapping);
@@ -222,24 +227,33 @@ export default function App() {
   };
 
   const doneDocs = docs.filter((d) => d.doc).map((d) => d.doc!);
+  const saudaDocs = `${saudaBase(window.location, saudaOverride())}#/docs/supply`;
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand__mark" aria-hidden>≡</span>
-          <span className="brand__name">Накладные <span className="brand__arrow">→</span> Sauda</span>
-        </div>
+        <a className="brand" href={saudaDocs} title="Вернуться в Sauda — к приёмкам">
+          <span className="brand__mark" aria-hidden>S</span>
+          Sauda
+          <span className="brand__section">Накладные</span>
+        </a>
         <nav className="topbar__nav">
+          <button type="button" className="btn btn--ghost" onClick={() => setHelp(true)} aria-label="Как загрузить в Sauda" title="Как загрузить в Sauda"><IconHelp /> <span className="hide-sm">Как загрузить в Sauda</span></button>
+          <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'mapping' })} aria-label="Справочник кодов" title="Справочник кодов"><IconBook /> <span className="hide-sm">Справочник</span></button>
+          <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'export' })} aria-label="Настройки" title="Настройки"><IconSettings /> <span className="hide-sm">Настройки</span></button>
+        </nav>
+        <div className="topbar__end">
           {doneDocs.length > 1 && (
             <button type="button" className="btn btn--ghost" onClick={() => downloadBlob(toReportBlob(doneDocs), 'Отчёт_по_накладным.xlsx')}>
               Отчёт по всем
             </button>
           )}
-          <button type="button" className="btn btn--ghost" onClick={() => setHelp(true)} aria-label="Как загрузить в Sauda" title="Как загрузить в Sauda"><IconHelp /> <span className="hide-sm">Как загрузить в Sauda</span></button>
-          <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'mapping' })} aria-label="Справочник кодов" title="Справочник кодов"><IconBook /> <span className="hide-sm">Справочник</span></button>
-          <button type="button" className="btn btn--ghost" onClick={() => setDrawer({ open: true, tab: 'export' })} aria-label="Настройки" title="Настройки"><IconSettings /> <span className="hide-sm">Настройки</span></button>
-        </nav>
+          <button type="button" className="icon-btn" onClick={() => setTheme(NEXT_THEME[theme])}
+            title={`Тема: ${THEME_LABEL[theme]}. Нажмите — ${THEME_LABEL[NEXT_THEME[theme]].toLowerCase()}`} aria-label={`Тема: ${THEME_LABEL[theme]}`}>
+            {theme === 'dark' ? <IconMoon /> : theme === 'light' ? <IconSun /> : <IconAutoTheme />}
+          </button>
+          <a className="btn btn--ghost" href={saudaDocs} title="Вернуться в Sauda — к приёмкам"><IconBack /> <span className="hide-sm">Приёмки в Sauda</span></a>
+        </div>
       </header>
 
       {docs.length === 0 ? (
