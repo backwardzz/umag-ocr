@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { CatalogIndex } from '../core/catalog';
 import type { ParsedDoc, ParsedItem } from '../core/types';
 import { buildRows, exportFileName, mergedLineCount, toTsv, toXlsxBlob, toReportBlob, type ExportSettings } from '../core/export';
-import { approveAll, summarize, money, qtyFmt, type BulkOp, type DocEntry } from './model';
+import { approveAll, isContinuation, summarize, money, qtyFmt, type BulkOp, type DocEntry } from './model';
 import { ItemsTable } from './ItemsTable';
 import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
 import { saudaBase, saudaLink, saudaOverride } from '../core/sauda';
 import { downloadBlob, copyText } from './storage';
-import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh, IconX } from './Icons';
+import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh, IconX, IconPlus } from './Icons';
 
 const plural = (n: number, one: string, few: string, many: string) =>
   n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
@@ -27,10 +27,18 @@ interface Props {
   onItemsReplace: (items: ParsedItem[]) => void;
   onDelete: () => void;
   onRetry: () => void;
+  /** Следующие листы той же таблицы — распознаются и склеиваются с этой накладной */
+  onAddPages: (files: File[]) => void;
+  /** Отменить распознавание добавляемого листа */
+  onCancelPage: (id: string) => void;
+  /** Накладные, к которым этот лист можно присоединить */
+  joinTargets: DocEntry[];
+  onJoin: (targetId: string) => void;
   toast: (text: string) => void;
 }
 
-export function DocView({ entry, settings, catalog, onDocChange, onItemChange, onItemRemove, onItemAdd, onBulk, onItemsReplace, onDelete, onRetry, toast }: Props) {
+export function DocView({ entry, settings, catalog, onDocChange, onItemChange, onItemRemove, onItemAdd, onBulk, onItemsReplace, onDelete, onRetry, onAddPages, onCancelPage, joinTargets, onJoin, toast }: Props) {
+  const pageInput = useRef<HTMLInputElement>(null);
   const [view, setView] = useState<'photo' | 'ocr'>('photo');
   // На узких экранах фото над таблицей; его можно свернуть
   const [photoOpen, setPhotoOpen] = useState(() => window.innerWidth >= 1400);
@@ -149,6 +157,9 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   const parserIssues = doc.issues.filter((x) => x.kind !== 'totals' && x.level !== 'info');
   const autofilled = doc.items.filter((it) => it.barcodeSource === 'catalog').length;
   const partial = s.total !== undefined && s.sum > 0 && s.total > s.sum * 1.3;
+  const pending = entry.pendingPages ?? [];
+  const sheetNo = pages.length + 1;
+  const addPage = () => pageInput.current?.click();
 
   return (
     <div className="docview">
@@ -160,6 +171,11 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           <div className="docview__format muted">{doc.formatName}</div>
         </div>
         <div className="actions">
+          <button type="button" className="btn" onClick={addPage} title="Таблица продолжается на следующем листе — добавьте его фото, строки допишутся сюда">
+            <IconPlus /> Добавить лист
+          </button>
+          <input ref={pageInput} type="file" accept="image/*,application/pdf,.pdf" multiple hidden
+            onChange={(e) => { const l = Array.from(e.target.files ?? []); e.target.value = ''; if (l.length) onAddPages(l); }} />
           <button type="button" className="btn btn--primary" onClick={toSauda} title="Открыть Sauda и создать из накладной черновик приёмки">
             В Sauda
           </button>
@@ -195,12 +211,25 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
           </span>
         )}
       </div>
+      {isContinuation(doc) && joinTargets.length > 0 && (
+        <div className="join-bar">
+          <IconAlert /> Без шапки накладной — похоже на следующий лист другой накладной.
+          <select defaultValue="" onChange={(e) => { if (e.target.value) onJoin(e.target.value); }} aria-label="Присоединить к накладной">
+            <option value="" disabled>Присоединить к…</option>
+            {joinTargets.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.doc?.supplier ?? d.fileName}{d.doc?.number ? ` № ${d.doc.number}` : ''} · {d.doc?.items.length} поз.{d.doc?.totals?.sum === undefined ? ' · ждёт лист' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {(parserIssues.length > 0 || partial) && (
         <ul className="doc-issues">
           {parserIssues.map((x, i) => <li key={i} className={`row-issue row-issue--${x.level}`}>{x.text}</li>)}
           {partial && (
             <li className="row-issue row-issue--warn">
-              Итог накладной намного больше суммы строк — похоже, это не вся накладная. Загрузите остальные страницы: страницы с тем же номером склеятся сами.
+              Итог накладной намного больше суммы строк — похоже, это не вся накладная. Добавьте остальные листы кнопкой «Добавить лист».
             </li>
           )}
         </ul>
@@ -223,14 +252,25 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
                 </span>
               )}
             </span>
-            <span className={`chip ${s.totalsOk === false ? 'chip--err' : s.totalsOk ? 'chip--ok' : 'chip--warn'}`}>
-              {s.totalsOk ? <IconCheck /> : <IconAlert />}
-              {s.total === undefined
-                ? `Итог не прочитан · по строкам ${money(s.sum)} ₸`
-                : s.totalsOk
-                  ? `Сходится с итогом: ${money(s.total)} ₸`
-                  : `По строкам ${money(s.sum)} ₸, в накладной ${money(s.total)} ₸`}
-            </span>
+            {pending.length > 0 ? (
+              <span className="chip chip--wait" title="Итог сверится, когда распознаются все добавленные листы">
+                <span className="spinner" aria-hidden />
+                Ждёт {pending.length > 1 ? `листы ${sheetNo}–${sheetNo + pending.length - 1}` : `лист ${sheetNo}`} · {Math.round(pending[0].progress * 100)}% · пока {money(s.sum)} ₸
+                <button type="button" className="chip__x" onClick={() => pending.forEach((p) => onCancelPage(p.id))} title="Не добавлять лист" aria-label="Отменить добавление листа"><IconX /></button>
+              </span>
+            ) : s.total === undefined ? (
+              <span className="chip chip--warn">
+                <IconAlert /> Итог не найден · по строкам {money(s.sum)} ₸ ·
+                <button type="button" className="chip__link" onClick={addPage} title="Таблица продолжается на следующем листе? Итог обычно на последнем">
+                  ждёт лист {sheetNo}? Добавить
+                </button>
+              </span>
+            ) : (
+              <span className={`chip ${s.totalsOk ? 'chip--ok' : 'chip--err'}`}>
+                {s.totalsOk ? <IconCheck /> : <IconAlert />}
+                {s.totalsOk ? `Сходится с итогом: ${money(s.total)} ₸` : `По строкам ${money(s.sum)} ₸, в накладной ${money(s.total)} ₸`}
+              </span>
+            )}
           </div>
           {autofilled > 0 && (
             <p className="autofill-note">

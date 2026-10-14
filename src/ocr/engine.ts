@@ -7,6 +7,7 @@ import { toOcrPage, type OcrPage } from '../core/ocrTypes';
 import { recognizePage, type Recognizer } from '../core/pipeline';
 import { grayToRGBA, type Gray } from '../core/image';
 import type { ParsedDoc } from '../core/types';
+import type { FormatHint } from '../core/parse';
 import type { PreprocessRequest, PreprocessResponse } from './preprocess.worker';
 
 export interface RecognizeResult {
@@ -113,7 +114,8 @@ function stopWorkers() {
 let chain: Promise<unknown> = Promise.resolve();
 
 /** signal — отмена: фото в очереди просто пропускается, идущее распознавание останавливается сразу */
-export function recognizeInvoice(file: Blob, onProgress: Progress, signal?: AbortSignal): Promise<RecognizeResult> {
+/** hint — формат первого листа, когда распознаётся лист-продолжение («Добавить лист») */
+export function recognizeInvoice(file: Blob, onProgress: Progress, signal?: AbortSignal, hint?: FormatHint): Promise<RecognizeResult> {
   // отменённая работа не должна продолжаться на воркерах следующего фото
   const check = () => { if (signal?.aborted) throw abortError(); };
   const work = async (): Promise<RecognizeResult> => {
@@ -155,7 +157,7 @@ export function recognizeInvoice(file: Blob, onProgress: Progress, signal?: Abor
           const p = await preprocessInWorker(await loadImageData(file, cw ? 1 : -1));
           check();
           return { image: toGrayImage(p), extra: { rules: p.rules, charHeight: p.charHeight } };
-        });
+        }, hint);
       const shownPng = used === image ? processedPng : await grayToPng(used);
       if (import.meta.env.DEV) {
         const g = globalThis as Record<string, unknown>;

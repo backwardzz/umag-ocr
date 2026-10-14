@@ -36,7 +36,7 @@ export function DocList({ docs, selected, catalog, onSelect, onCancel }: Props) 
                 {d.status === 'error' && <span className="doccard__meta doccard__meta--err">Ошибка: {d.error}</span>}
                 {s && d.doc && (
                   <span className="doccard__meta">
-                    {dup ? 'Повтор · ' : ''}{d.doc.number ? `№ ${d.doc.number} · ` : ''}{d.doc.pages ? `${d.doc.pages} стр. · ` : ''}{s.rows} поз. · {money(s.sum)} ₸
+                    {d.pendingPages?.length ? 'Ждёт лист · ' : ''}{dup ? 'Повтор · ' : ''}{d.doc.number ? `№ ${d.doc.number} · ` : ''}{d.doc.pages ? `${d.doc.pages} стр. · ` : ''}{s.rows} поз. · {money(s.sum)} ₸
                   </span>
                 )}
               </span>

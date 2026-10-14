@@ -1,6 +1,6 @@
 /**
  * Прогон фото через тот же конвейер, что и в браузере, но в Node.
- *   npm run ocr -- samples/1.jpg [--psm 6] [--text]
+ *   npm run ocr -- samples/1.jpg [--psm 6] [--text] [--hint "<поставщик первого листа>"]
  * Сохраняет предобработанное изображение в out/ и OCR-результат в samples/*.ocr.json
  * (его потом используют тесты парсеров, чтобы не гонять OCR каждый раз).
  */
@@ -15,7 +15,10 @@ import { recognizePage, type Recognizer } from '../src/core/pipeline';
 import { printDoc } from './print';
 
 const args = process.argv.slice(2);
-const files = args.filter((a) => !a.startsWith('--') && !/^\d+$/.test(a));
+const hintIdx = args.indexOf('--hint');
+/** --hint "<поставщик>": лист-продолжение без шапки разбирается форматом этого поставщика */
+const hint = hintIdx >= 0 ? { supplier: args[hintIdx + 1] } : undefined;
+const files = args.filter((a, i) => !a.startsWith('--') && !/^\d+$/.test(a) && (hintIdx < 0 || i !== hintIdx + 1));
 const psmIdx = args.indexOf('--psm');
 const psm = psmIdx >= 0 ? args[psmIdx + 1] : '6';
 
@@ -109,7 +112,7 @@ for (const file of files) {
     const r = rotate90(img.data, img.width, img.height, cw);
     const p = preprocess(r.data, r.width, r.height);
     return { image: p.image, extra: { rules: p.rules, charHeight: p.charHeight * p.scale } };
-  });
+  }, hint);
   if (image !== pre.image) fs.writeFileSync(path.join('out', `${base}.pre.png`), toPng(image));
   const t2 = Date.now();
   fs.writeFileSync(file.replace(/\.\w+$/, '.ocr.json'), JSON.stringify(page, null, 1));

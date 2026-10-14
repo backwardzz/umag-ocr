@@ -2,7 +2,7 @@
  * Пересчёт единиц (1 блок = 10 шт) и массовые правки строк — без OCR, на искусственных данных.
  *   npx tsx scripts/test-units.ts
  */
-import { allIssues, applyUnitRules, approveAll, bulkEdit, patchItem, worstLevel } from '../src/app/model';
+import { allIssues, applyUnitRules, approveAll, attachPage, awaitsSheet, bulkEdit, fixByTotals, isContinuation, isSamePage, mergePages, patchItem, worstLevel, type DocEntry } from '../src/app/model';
 import { issue } from '../src/core/types';
 import { buildRows, DEFAULT_EXPORT, DEFAULT_UNIT_RULES, type ExportSettings } from '../src/core/export';
 import type { ParsedDoc, ParsedItem } from '../src/core/types';
@@ -89,6 +89,40 @@ check(/^[\w-]+$/.test(sCode) && sBack.items[0].name === 'Айран' && sBack.nu
 check(saudaBase({ href: 'https://backwardzz.github.io/umag-ocr/', hostname: 'backwardzz.github.io' }) === 'https://backwardzz.github.io/sauda/', 'на Pages Sauda лежит рядом');
 check(saudaBase({ href: 'http://localhost:5179/', hostname: 'localhost' }) === 'http://localhost:5181/', 'локально Sauda на порту 5181');
 check(saudaBase({ href: 'x', hostname: 'y' }, 'https://my.site/app') === 'https://my.site/app/', 'адрес Sauda можно переопределить');
+
+// Листы одной таблицы (KDV на 3 листах): продолжения без шапки, «Итого» на последнем, добавлены не по порядку
+console.log('Склейка листов');
+const sheet = (from: number, n: number, extra: Partial<ParsedDoc> = {}): ParsedDoc => ({
+  format: 'z2', formatName: 'z2', issues: [], ...extra,
+  items: Array.from({ length: n }, (_, i) => item({ n: i + 1, name: `Товар ${from + i}`, barcode: `46${String(from + i).padStart(11, '0')}`, qty: 1, price: 100, sum: 100 })),
+});
+const p1 = sheet(1, 31, { supplier: 'ТОО "KDV Казахстан"', number: '9528700271', date: '14.10.2026' });
+const p2 = sheet(32, 40, { issues: [issue('warn', 'Формат накладной не распознан — разобрано как форма З-2, проверьте внимательно')] });
+// итог 7 900 прочитан как 900 (потеряна первая цифра), НДС 16% = 1 089,66 сходится со строками
+const p3 = sheet(72, 8, { totals: { sum: 900, vat: 1089.66 } });
+check(!isContinuation(p1) && isContinuation(p2) && isContinuation(p3), 'лист без поставщика, номера и даты — продолжение');
+const e1: DocEntry = { id: 'a', fileName: '1.jpg', fileUrl: 'u1', status: 'done', progress: 1, doc: p1 };
+check(awaitsSheet(e1) && !awaitsSheet({ ...e1, doc: p3 }), 'без «Итого» накладная ждёт следующий лист');
+const m13 = mergePages(p1, p3);
+const e13: DocEntry = { ...e1, doc: m13, extraPages: [{ fileName: '3.jpg', fileUrl: 'u3' }] };
+const j = attachPage(e13, p2, { fileName: '2.jpg', fileUrl: 'u2' });
+const names = j.doc!.items.map((x) => x.name);
+check(j.doc!.items.length === 79 && names[0] === 'Товар 1' && names[31] === 'Товар 32' && names[78] === 'Товар 79', 'лист 2, добавленный после листа с итогом, встаёт перед ним');
+check(j.doc!.items.every((x, i) => x.n === i + 1), 'строки перенумерованы подряд');
+check(j.fileUrl === 'u1' && j.extraPages!.map((x) => x.fileUrl).join() === 'u2,u3', 'фото листов в том же порядке');
+check(j.doc!.number === '9528700271' && j.doc!.supplier === 'ТОО "KDV Казахстан"' && j.doc!.pageSizes!.join() === '31,40,8', 'шапка с первого листа, границы листов сохранены');
+check(j.doc!.totals?.sum === 7900 && j.doc!.issues.some((x) => x.kind === 'vat-total'), 'итог с потерянной цифрой восстановлен по НДС');
+check(!j.doc!.issues.some((x) => x.text.startsWith('Формат накладной не распознан')), 'у листа-продолжения нет замечания «формат не распознан»');
+check(isSamePage(j.doc!, p2) && !isSamePage(p1, p2), 'тот же лист повторно узнаётся');
+const kg: ParsedDoc = { format: 't', formatName: 't', issues: [], totals: { qty: 10.5 }, items: [
+  item({ name: 'Мармелад', unit: 'кг', qty: 5, price: 156.2, sum: 781, readings: { price: [1562, 1562], sum: [781], support: 3 } }),
+  item({ name: 'Печенье /5', unit: 'кг', qty: 5, price: 1196, sum: 5980, readings: { price: [1196], sum: [5980], support: 4 } }),
+  item({ name: 'Печенье', unit: 'кг', qty: 10, price: 100, sum: 1000 }),
+  item({ name: 'Вафли', unit: 'шт', qty: 5, price: 105, sum: 525 }),
+] };
+kg.totals = { qty: 20.5 };
+const kgFixed = fixByTotals(kg).items[0];
+check(kgFixed.qty === 0.5 && kgFixed.price === 1562 && kgFixed.sum === 781, '«5 кг × 156,20» → «0,5 кг × 1 562» по «Итого» количества');
 
 console.log(fails ? `\nОшибок: ${fails}` : '\nЕдиницы и массовые правки: все проверки пройдены');
 process.exit(fails ? 1 : 0);

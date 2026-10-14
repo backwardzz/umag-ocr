@@ -8,7 +8,7 @@
  */
 import type { Gray } from './image';
 import type { OcrLine, OcrPage, OcrStrip } from './ocrTypes';
-import { parseDocument, planStrips } from './parse';
+import { parseDocument, planStrips, type FormatHint } from './parse';
 import type { ParsedDoc } from './types';
 
 export interface RecognizeOptions {
@@ -55,6 +55,7 @@ export async function recognizePage(
   recognize: Recognizer,
   onStage?: (stage: string, fraction: number) => void,
   rotated?: Rotated,
+  hint?: FormatHint,
 ): Promise<{ page: OcrPage; doc: ParsedDoc; image: Gray }> {
   let lines = await recognize(image, {});
   // Фото снято боком (EXIF об этом молчит): текста почти не найдено — пробуем оба поворота и берём лучший
@@ -68,7 +69,7 @@ export async function recognizePage(
     }
   }
   const page: OcrPage = { width: image.w, height: image.h, lines: [...lines].sort((a, b) => a.y0 - b.y0), ...extra };
-  const plan = planStrips(page);
+  const plan = planStrips(page, hint);
   if (plan.length) {
     const strips: OcrStrip[] = [];
     for (let i = 0; i < plan.length; i++) {
@@ -81,5 +82,5 @@ export async function recognizePage(
     }
     page.strips = strips;
   }
-  return { page, doc: parseDocument(page), image };
+  return { page, doc: parseDocument(page, hint), image };
 }

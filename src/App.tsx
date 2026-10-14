@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { recognizeInvoice, isAbort } from './ocr/engine';
+import { parseDocument } from './core/parse';
 import { isPdf, pdfToPages } from './ocr/pdf';
 import { loadMapping, saveMapping, mapKey, itemMapCode, type MappingStore } from './core/mapping';
 import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core/catalog';
 import { toReportBlob, type ExportSettings } from './core/export';
 import { issue, sourceName, type ParsedDoc, type ParsedItem } from './core/types';
 import {
-  applyCatalog, applyCatalogNames, applyMapping, fillBarcodeByName, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, mergePages, newItem, patchItem, ruleFor,
+  applyCatalog, applyCatalogNames, applyMapping, fillBarcodeByName, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, fixByTotals, isSamePage, attachPage, isContinuation, awaitsSheet, newItem, patchItem, ruleFor,
   type BulkOp, type DocEntry,
 } from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
@@ -81,16 +82,23 @@ export default function App() {
         if (ctl.signal.aborted) return;
         // Сначала справочник (штрихкоды, подтверждённые пользователем), затем автозаполнение из каталога,
         // затем названия из каталога по найденным штрихкодам; в конце — пересчёт единиц (1 блок = 10 шт)
-        const doc = applyUnitRules(enrichDoc(res.doc, mappingRef.current, catalogRef.current), settingsRef.current.unitRules);
+        const prepare = (d: ParsedDoc) => fixByTotals(applyUnitRules(enrichDoc(d, mappingRef.current, catalogRef.current), settingsRef.current.unitRules));
+        const doc = prepare(res.doc);
         const self = docsRef.current.find((d) => d.id === id);
-        const rel = findRelated(docsRef.current, id, doc);
+        let rel = findRelated(docsRef.current, id, doc);
+        // Лист-продолжение без шапки, загруженный вместе с первым: если ровно одна накладная ждёт следующий лист — он её
+        if (!rel && isContinuation(doc)) {
+          const waiting = docsRef.current.filter((d) => d.id !== id && awaitsSheet(d));
+          if (waiting.length === 1) rel = { kind: 'page', target: waiting[0] };
+        }
         if (rel?.kind === 'page' && self) {
           // Вторая страница той же накладной — присоединяем к первой, отдельной карточки не будет
           const page = { fileName: self.fileName, fileUrl: self.fileUrl, processedUrl: res.processedUrl };
-          setDocs((prev) => prev.filter((d) => d.id !== id).map((d) => (d.id === rel.target.id && d.doc
-            ? { ...d, doc: mergePages(d.doc, doc), extraPages: [...(d.extraPages ?? []), page] }
-            : d)));
-          setSelected((cur) => (cur === id ? rel.target.id : cur));
+          const target = rel.target;
+          // лист без шапки — заново разбираем форматом первого листа (разметка столбцов та же)
+          const sheet = isContinuation(doc) && target.doc?.supplier ? prepare(parseDocument(res.page, { supplier: target.doc.supplier })) : doc;
+          setDocs((prev) => prev.filter((d) => d.id !== id).map((d) => (d.id === target.id ? { ...d, ...attachPage(d, sheet, page) } : d)));
+          setSelected((cur) => (cur === id ? target.id : cur));
           files.current.delete(id);
           toast(`«${self.fileName}» — следующая страница накладной${doc.number ? ` № ${doc.number}` : ''}, строки добавлены к ней`);
           return;
@@ -105,6 +113,61 @@ export default function App() {
       .catch((err: unknown) => { if (!isAbort(err)) update(id, { status: 'error', error: err instanceof Error ? err.message : String(err) }); })
       .finally(() => { if (aborts.current.get(id) === ctl) aborts.current.delete(id); });
   }, [update]);
+
+  /**
+   * «Добавить лист»: следующий лист той же таблицы (продолжение без шапки, номера и поставщика)
+   * распознаётся и склеивается с этой накладной; пока листы распознаются, итог ждёт их
+   */
+  const addPagesTo = useCallback(async (targetId: string, list: File[]) => {
+    const images: File[] = [];
+    for (const f of list) {
+      if (!isPdf(f)) { images.push(f); continue; }
+      try { images.push(...await pdfToPages(f)); } catch (err) {
+        toast(`Не удалось открыть «${f.name}»: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    for (const file of images) {
+      const pid = newId();
+      const ctl = new AbortController();
+      aborts.current.set(pid, ctl);
+      const setPending = (fn: (p: NonNullable<DocEntry['pendingPages']>) => NonNullable<DocEntry['pendingPages']>) =>
+        update(targetId, (d) => ({ pendingPages: fn(d.pendingPages ?? []) }));
+      setPending((p) => [...p, { id: pid, fileName: file.name, progress: 0 }]);
+      const fileUrl = URL.createObjectURL(file);
+      // лист без шапки разбирается форматом первого листа
+      const hint = { supplier: docsRef.current.find((d) => d.id === targetId)?.doc?.supplier };
+      recognizeInvoice(file, (stage, p) => setPending((all) => all.map((x) => (x.id === pid ? { ...x, stage, progress: p } : x))), ctl.signal, hint)
+        .then((res) => {
+          if (ctl.signal.aborted) return;
+          const page = applyUnitRules(enrichDoc(res.doc, mappingRef.current, catalogRef.current), settingsRef.current.unitRules);
+          const target = docsRef.current.find((d) => d.id === targetId);
+          if (!target?.doc) return;
+          if (!page.items.length) { toast(`«${file.name}»: строки таблицы не найдены — лист не добавлен`); return; }
+          if (isSamePage(target.doc, page)) { toast(`«${file.name}» — этот лист уже есть в накладной`); return; }
+          update(targetId, (d) => attachPage(d, page, { fileName: file.name, fileUrl, processedUrl: res.processedUrl }));
+          toast(`«${file.name}»: добавлено строк — ${page.items.length}`);
+        })
+        .catch((err: unknown) => { if (!isAbort(err)) toast(`«${file.name}» не распознан: ${err instanceof Error ? err.message : String(err)}`); })
+        .finally(() => {
+          setPending((p) => p.filter((x) => x.id !== pid));
+          if (aborts.current.get(pid) === ctl) aborts.current.delete(pid);
+        });
+    }
+  }, [update, toast]);
+
+  /** Накладную src (лист, загруженный отдельно) присоединить к накладной target как её лист */
+  const joinTo = (srcId: string, targetId: string) => {
+    const src = docsRef.current.find((d) => d.id === srcId);
+    if (!src?.doc) return;
+    const photos = [{ fileName: src.fileName, fileUrl: src.fileUrl, processedUrl: src.processedUrl }, ...(src.extraPages ?? [])];
+    setDocs((prev) => prev.filter((d) => d.id !== srcId).map((d) => (d.id === targetId ? { ...d, ...attachPage(d, src.doc!, ...photos) } : d)));
+    setSelected(targetId);
+    files.current.delete(srcId);
+    toast(`Строки «${src.fileName}» добавлены к накладной`);
+  };
+
+  /** Отменить распознавание добавляемого листа */
+  const cancelPage = (pid: string) => { aborts.current.get(pid)?.abort(); };
 
   const addImages = useCallback((list: File[]) => {
     const entries: DocEntry[] = list.map((f) => {
@@ -218,6 +281,7 @@ export default function App() {
   const onDelete = (id: string) => {
     aborts.current.get(id)?.abort();
     aborts.current.delete(id);
+    docsRef.current.find((d) => d.id === id)?.pendingPages?.forEach((p) => aborts.current.get(p.id)?.abort());
     setDocs((prev) => {
       const next = prev.filter((d) => d.id !== id);
       if (selected === id) setSelected(next[0]?.id);
@@ -269,7 +333,7 @@ export default function App() {
           <details className="formats-box">
             <summary>Какие накладные принимает система · {FORMATS_COUNT} поставщиков</summary>
             <FormatsList />
-            <p className="muted small">Многостраничную накладную загрузите всеми фото — страницы склеятся сами.</p>
+            <p className="muted small">Многостраничную накладную загрузите всеми фото — листы склеятся сами. Или откройте первый лист и нажмите «Добавить лист».</p>
           </details>
         </main>
       ) : (
@@ -293,6 +357,10 @@ export default function App() {
                 onItemsReplace={(items) => changeDoc(current.id, (d) => ({ ...d, items }))}
                 onDelete={() => onDelete(current.id)}
                 onRetry={() => process(current.id)}
+                onAddPages={(list) => addPagesTo(current.id, list)}
+                onCancelPage={cancelPage}
+                joinTargets={docs.filter((d) => d.id !== current.id && d.doc && !isContinuation(d.doc))}
+                onJoin={(targetId) => joinTo(current.id, targetId)}
                 toast={toast}
               />
             ) : (

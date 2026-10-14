@@ -34,9 +34,17 @@ type FormatChoice =
   | { kind: 'setkola'; supplier?: SupplierDef }
   | { kind: 'z2'; opts: Z2Options; supplier?: SupplierDef; unknown: boolean };
 
-function chooseFormat(page: OcrPage): FormatChoice {
+/**
+ * Подсказка для листа-продолжения: поставщик первого листа той же накладной. У продолжения нет шапки
+ * (ни БИН, ни названия поставщика), и без подсказки разметка таблицы угадывается заново
+ */
+export interface FormatHint {
+  supplier?: string;
+}
+
+function chooseFormat(page: OcrPage, hint?: FormatHint): FormatChoice {
   const text = pageText(page);
-  const supplier = detectSupplier(page);
+  const supplier = detectSupplier(page) ?? (hint?.supplier ? SUPPLIERS.find((s) => s.name === hint.supplier) : undefined);
   if (supplier?.parser === 'setkola') return { kind: 'setkola', supplier };
   if (supplier?.parser === 'z2') return { kind: 'z2', opts: supplier.z2 ?? GENERIC_Z2, supplier, unknown: false };
   if (/ВСЕГО\s+ПО\s+СЧЕТУ|ЦЕНА\s+ЗА\s+УП/i.test(text)) return { kind: 'setkola' };
@@ -80,13 +88,13 @@ function bestLayout(page: OcrPage, base: Z2Options): Z2Options {
 }
 
 /** Что распознать вторым проходом (узкие полосы столбцов) */
-export function planStrips(page: OcrPage): StripPlan[] {
-  const f = chooseFormat(page);
+export function planStrips(page: OcrPage, hint?: FormatHint): StripPlan[] {
+  const f = chooseFormat(page, hint);
   return f.kind === 'z2' ? planZ2Strips(page, f.opts) : [];
 }
 
-export function parseDocument(page: OcrPage): ParsedDoc {
-  const f = chooseFormat(page);
+export function parseDocument(page: OcrPage, hint?: FormatHint): ParsedDoc {
+  const f = chooseFormat(page, hint);
   const supplier = f.supplier;
   let doc: ParsedDoc;
   if (f.kind === 'setkola') {

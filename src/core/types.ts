@@ -89,6 +89,8 @@ export interface ParsedDoc {
   issues: Issue[];
   /** Сколько фото (страниц) склеено в эту накладную */
   pages?: number;
+  /** Сколько строк на каждом склеенном листе, по порядку листов */
+  pageSizes?: number[];
 }
 
 export const issue = (level: IssueLevel, text: string, kind?: string): Issue => (kind ? { level, text, kind } : { level, text });

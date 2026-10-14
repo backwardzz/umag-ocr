@@ -24,6 +24,15 @@ export interface DocEntry {
   processedUrl?: string;
   /** Следующие страницы той же накладной, присоединённые к этой */
   extraPages?: PagePhoto[];
+  /** Листы, добавленные кнопкой «Добавить лист» и ещё распознающиеся; итог ждёт их */
+  pendingPages?: PendingPage[];
+}
+
+export interface PendingPage {
+  id: string;
+  fileName: string;
+  stage?: string;
+  progress: number;
 }
 
 export const docSupplierKey = (doc: ParsedDoc) => supplierKey(doc.supplierBin, doc.supplier);
@@ -63,20 +72,108 @@ export function findRelated(docs: DocEntry[], id: string, doc: ParsedDoc): { kin
   return undefined;
 }
 
-/** Склеивает страницы одной накладной; страница с «Итого» (последняя) идёт в конец */
+/** Лист b — повтор уже склеенных строк a (то же фото добавили ещё раз) */
+export const isSamePage = (a: ParsedDoc, b: ParsedDoc) => containsItems(a, b);
+
+/** Строк на листах; строки удаляли или добавляли вручную — границы листов неизвестны, считаем одним листом */
+const pageSizes = (d: ParsedDoc) => (d.pageSizes && d.pageSizes.reduce((x, y) => x + y, 0) === d.items.length ? d.pageSizes : [d.items.length]);
+
+/**
+ * Куда встаёт лист b среди листов a (индекс листа): лист без «Итого» — перед последним листом a,
+ * если тот уже с «Итого» (листы добавили не по порядку), иначе в конец
+ */
+export function pageInsertIndex(a: ParsedDoc, b: ParsedDoc): number {
+  const n = pageSizes(a).length;
+  return a.totals?.sum !== undefined && b.totals?.sum === undefined ? n - 1 : n;
+}
+
+/** Лист-продолжение таблицы: без шапки — ни поставщика, ни номера, ни даты */
+export const isContinuation = (doc: ParsedDoc) => !!doc.items.length && !doc.supplier && !doc.supplierBin && !doc.number && !doc.date;
+
+/** Накладная ждёт следующий лист: итог не найден (он обычно на последнем листе) */
+export const awaitsSheet = (d: DocEntry) => !!d.doc && d.doc.totals?.sum === undefined && !isContinuation(d.doc);
+
+/** Присоединяет распознанный лист к накладной: строки и фото встают на место листа */
+export function attachPage(d: DocEntry, page: ParsedDoc, ...photo: PagePhoto[]): Partial<DocEntry> {
+  if (!d.doc) return {};
+  const photos: PagePhoto[] = [{ fileName: d.fileName, fileUrl: d.fileUrl, processedUrl: d.processedUrl }, ...(d.extraPages ?? [])];
+  photos.splice(Math.min(pageInsertIndex(d.doc, page), photos.length), 0, ...photo);
+  const [main, ...rest] = photos;
+  return { doc: mergePages(d.doc, page), fileName: main.fileName, fileUrl: main.fileUrl, processedUrl: main.processedUrl, extraPages: rest };
+}
+
+const FORMAT_GUESS =/^Формат накладной не распознан/;
+
+/** Склеивает листы одной накладной; лист с «Итого» (последний) остаётся в конце */
 export function mergePages(a: ParsedDoc, b: ParsedDoc): ParsedDoc {
-  const [first, last] = a.totals?.sum !== undefined && b.totals?.sum === undefined ? [b, a] : [a, b];
-  const items = [...first.items, ...last.items].map((it, i) => ({ ...it, n: i + 1 }));
-  return {
+  const at = pageInsertIndex(a, b);
+  const sizes = pageSizes(a);
+  const cut = sizes.slice(0, at).reduce((x, y) => x + y, 0);
+  const items = [...a.items.slice(0, cut), ...b.items, ...a.items.slice(cut)].map((it, i) => ({ ...it, n: i + 1 }));
+  const headFirst = at === 0 ? b : a;
+  // у листа-продолжения нет шапки — формат «не распознан», хотя у первого листа он известен
+  const bIssues = a.issues.some((x) => FORMAT_GUESS.test(x.text)) ? b.issues : b.issues.filter((x) => !FORMAT_GUESS.test(x.text));
+  const merged: ParsedDoc = {
     ...a,
     supplier: a.supplier ?? b.supplier,
     supplierBin: a.supplierBin ?? b.supplierBin,
-    number: first.number ?? last.number,
-    date: first.date ?? last.date,
+    number: headFirst.number ?? a.number ?? b.number,
+    date: headFirst.date ?? a.date ?? b.date,
     items,
-    totals: last.totals ?? first.totals,
-    issues: [...first.issues, ...last.issues].filter((x, i, all) => x.kind !== 'totals' && all.findIndex((y) => y.text === x.text) === i),
+    totals: b.totals?.sum !== undefined ? b.totals : a.totals ?? b.totals,
+    issues: [...a.issues, ...bIssues].filter((x, i, all) => x.kind !== 'totals' && x.kind !== 'vat-total' && all.findIndex((y) => y.text === x.text) === i),
     pages: (a.pages ?? 1) + (b.pages ?? 1),
+    pageSizes: [...sizes.slice(0, at), ...pageSizes(b), ...sizes.slice(at)],
+  };
+  return fixByTotals(merged);
+}
+
+/** Сверка с «Итого» после склейки листов: итог по НДС и количество по итогу количества */
+export const fixByTotals = (doc: ParsedDoc) => qtyByTotal(totalByVat(doc));
+
+/**
+ * Запятая в количестве потеряна или лишняя: «5 кг × 156,20» вместо «0,5 кг × 1 562» — сумма та же,
+ * а «Итого» количества не сходится ровно на эту строку. Исправляем, только если такая строка одна
+ */
+export function qtyByTotal(doc: ParsedDoc): ParsedDoc {
+  const want = doc.totals?.qty;
+  if (want === undefined) return doc;
+  const have = doc.items.reduce((a, it) => a + ((it.orig ? it.orig.qty : it.qty) ?? 0), 0);
+  const diff = want - have;
+  // большая разница — это не одна строка, а лист из многостраничной накладной (итог за все листы)
+  if (Math.abs(diff) < 0.0005 || Math.abs(diff) > have * 0.5) return doc;
+  const k = diff < 0 ? 0.1 : 10;
+  // дробное количество бывает только у весового и разливного товара: «0,5 шт» — не прочтение
+  const fits = (it: ParsedItem) => {
+    const q = Math.round(it.qty! * k * 1000) / 1000;
+    return Number.isInteger(q) || /^(кг|л|м|г)(?![а-яё])/i.test(it.unit ?? '');
+  };
+  let hits = doc.items.flatMap((it, i) => (!it.orig && !it.edited && it.qty && it.price !== undefined && near(it.qty * k - it.qty, diff, 0.0005) && fits(it) ? [i] : []));
+  // несколько подходящих строк («5 кг» не одна) — та, где OCR прочитал цену именно такой («1 562»), а она пересчитана арифметикой
+  if (hits.length > 1) hits = hits.filter((i) => doc.items[i].readings?.price.some((p) => near(p, doc.items[i].price! / k, 0.01)));
+  if (hits.length !== 1) return doc;
+  const items = doc.items.map((it, i) => (i !== hits[0] ? it : {
+    ...it, qty: Math.round(it.qty! * k * 1000) / 1000, price: round2(it.price! / k),
+    issues: [...it.issues, issue('warn', `Количество прочитано как ${it.qty}, по «Итого» количества — ${Math.round(it.qty! * k * 1000) / 1000} (сумма та же) — сверьте`)],
+  }));
+  return { ...doc, items };
+}
+
+/**
+ * Итог прочитан с ошибкой (потеряна первая цифра: «36 264» вместо «136 264»), а НДС в «Итого»
+ * сходится с суммой строк — итог восстанавливаем по НДС
+ */
+export function totalByVat(doc: ParsedDoc): ParsedDoc {
+  const t = doc.totals;
+  if (t?.sum === undefined || t.vat === undefined) return doc;
+  const sum = rowsSum(doc);
+  if (near(t.sum, sum, 0.05 + doc.items.length * 0.01)) return doc;
+  const vatOk = [0.12, 0.16].some((r) => near(t.vat!, round2((sum * r) / (1 + r)), 0.05 + doc.items.length * 0.01));
+  if (!vatOk) return doc;
+  return {
+    ...doc,
+    totals: { ...t, sum, sumAlt: [...(t.sumAlt ?? []), t.sum] },
+    issues: [...doc.issues, issue('warn', `Итог прочитан как ${money(t.sum)} ₸, но НДС в «Итого» (${money(t.vat)} ₸) сходится с суммой строк ${money(sum)} ₸ — сверьте итог`, 'vat-total')],
   };
 }
 
