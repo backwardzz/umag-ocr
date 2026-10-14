@@ -128,7 +128,15 @@ function makeCells(ws: Word[], gap: number): Cell[] {
   // Ячейки собираем в пределах одной строки OCR: иначе при изгибе листа слова соседних строк слипаются
   const byLine = new Map<number, Word[]>();
   for (const w of ws) byLine.set(w.line, [...(byLine.get(w.line) ?? []), w]);
-  return [...byLine.values()].flatMap((line) => mergeThousands(groupCells(line, gap), gap)).map(toCell).sort((a, b) => a.x0 - b.x0);
+  return [...byLine.values()].flatMap((line) => mergeThousands(splitPercent(groupCells(line, gap)), gap)).map(toCell).sort((a, b) => a.x0 - b.x0);
+}
+
+/** Ставка НДС «16%» — своя ячейка: прижатая к сумме («1 298,00 16%,») она делала сумму нечитаемой */
+function splitPercent(groups: Word[][]): Word[][] {
+  return groups.flatMap((g) => {
+    const i = g.findIndex((w, k) => k > 0 && /^\d{1,2}%/.test(w.text) && /\d[.,]\d{2}$/.test(g[k - 1].text));
+    return i > 0 ? [g.slice(0, i), g.slice(i)] : [g];
+  });
 }
 
 /** «11 136,00»: пробел-разделитель тысяч шире обычного промежутка между словами ячейки */
@@ -329,7 +337,11 @@ function detectRoles(rows: number[][][], nCols: number): ColRole[] | undefined {
   // Если есть тройка, которая сходится настоящим умножением хотя бы в половине от этого числа строк, — берём её
   const maxAll = Math.max(0, ...allVotes.values());
   const maxReal = Math.max(0, ...realVotes.values());
-  const votes = maxReal >= Math.max(2, maxAll * 0.5)
+  // На коротком листе (последний лист накладной, 2–4 строки) настоящее умножение может сойтись всего в одной строке —
+  // и это всё равно надёжнее тройки «1 × 1 = 1», если та сходится не намного чаще
+  const shortReal = rows.length <= 4 && maxReal >= 1
+    && [...allVotes].some(([k, v]) => (realVotes.get(k) ?? 0) >= 1 && v >= maxAll * 0.5);
+  const votes = maxReal >= Math.max(2, maxAll * 0.5) || shortReal
     ? new Map([...allVotes].filter(([k]) => (realVotes.get(k) ?? 0) >= maxReal * 0.5))
     : allVotes;
   let best: number[] | undefined, bestVotes = 0;

@@ -4,7 +4,7 @@
  * Чтобы добавить нового поставщика с накладной формы З-2 — достаточно новой записи.
  */
 
-export type ParserId = 'z2' | 'setkola';
+export type ParserId = 'z2' | 'setkola' | 'tporder';
 
 export interface Z2Options {
   /**
@@ -81,6 +81,16 @@ export interface SupplierDef {
 }
 
 export const SUPPLIERS: SupplierDef[] = [
+  {
+    // Заказ торгового представителя: «Кому: Шалкар · ТП: … · Территория · Баланс · ЗАКАЗ (d0_76675)»,
+    // штрихкод перенесён на две строки (см. formats/tporder.ts)
+    id: 'lit-energy',
+    goods: 'чипсы LIT ENERGY',
+    name: 'LIT ENERGY',
+    bins: [],
+    keywords: [/ЗАКАЗ\s*\(\s*d0_/i, /Баланс:[\s\S]{0,400}Наименование[\s\S]{0,60}ЕИ/i],
+    parser: 'tporder',
+  },
   {
     id: 'grand-konditer',
     goods: 'карамель, конфеты',

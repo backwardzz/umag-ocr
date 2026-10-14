@@ -4,12 +4,13 @@
  *  2. Нет поставщика — определяем формат по ключевым фразам.
  *  3. Сверяем итоги документа с суммой строк.
  */
-import type { OcrPage, StripPlan } from './ocrTypes';
+import type { BBox, OcrPage, StripPlan } from './ocrTypes';
 import { pageText } from './layout';
 import { extractNumbers, fixDigits, near, round2 } from './numbers';
 import { SUPPLIERS, GENERIC_Z2, type SupplierDef, type Z2Options } from './suppliers';
 import { parseZ2, planZ2Strips, findNumberAndDate } from './formats/z2';
 import { parseSetKola } from './formats/setkola';
+import { parseTpOrder } from './formats/tporder';
 import { issue, type ParsedDoc, type ParsedItem } from './types';
 
 export type { ParsedDoc, ParsedItem } from './types';
@@ -32,6 +33,7 @@ export function detectSupplier(page: OcrPage): SupplierDef | undefined {
 
 type FormatChoice =
   | { kind: 'setkola'; supplier?: SupplierDef }
+  | { kind: 'tporder'; supplier?: SupplierDef }
   | { kind: 'z2'; opts: Z2Options; supplier?: SupplierDef; unknown: boolean };
 
 /**
@@ -46,6 +48,7 @@ function chooseFormat(page: OcrPage, hint?: FormatHint): FormatChoice {
   const text = pageText(page);
   const supplier = detectSupplier(page) ?? (hint?.supplier ? SUPPLIERS.find((s) => s.name === hint.supplier) : undefined);
   if (supplier?.parser === 'setkola') return { kind: 'setkola', supplier };
+  if (supplier?.parser === 'tporder') return { kind: 'tporder', supplier };
   if (supplier?.parser === 'z2') return { kind: 'z2', opts: supplier.z2 ?? GENERIC_Z2, supplier, unknown: false };
   if (/ВСЕГО\s+ПО\s+СЧЕТУ|ЦЕНА\s+ЗА\s+УП/i.test(text)) return { kind: 'setkola' };
   // Большинство накладных в РК — форма З-2. Сначала пробуем столбец с EAN, потом с кодами поставщика,
@@ -90,7 +93,9 @@ function bestLayout(page: OcrPage, base: Z2Options): Z2Options {
 /** Что распознать вторым проходом (узкие полосы столбцов) */
 export function planStrips(page: OcrPage, hint?: FormatHint): StripPlan[] {
   const f = chooseFormat(page, hint);
-  return f.kind === 'z2' ? planZ2Strips(page, f.opts) : [];
+  if (f.kind !== 'z2') return [];
+  const docNo = planDocNumberStrip(page);
+  return docNo ? [...planZ2Strips(page, f.opts), docNo] : planZ2Strips(page, f.opts);
 }
 
 export function parseDocument(page: OcrPage, hint?: FormatHint): ParsedDoc {
@@ -99,6 +104,8 @@ export function parseDocument(page: OcrPage, hint?: FormatHint): ParsedDoc {
   let doc: ParsedDoc;
   if (f.kind === 'setkola') {
     doc = parseSetKola(page);
+  } else if (f.kind === 'tporder') {
+    doc = parseTpOrder(page);
   } else {
     doc = parseZ2(page, f.opts);
     if (f.unknown) doc.issues.push(issue('warn', 'Формат накладной не распознан — разобрано как форма З-2, проверьте внимательно'));
@@ -116,9 +123,64 @@ export function parseDocument(page: OcrPage, hint?: FormatHint): ParsedDoc {
       doc.date ??= nd.date;
     }
   }
+  // Номер и дата в рамке под «Номер документа / Дата составления» первым проходом не прочитаны — дочитаны отдельно
+  const box = page.strips?.find((s) => s.role === 'docno');
+  if (box && (!doc.number || !doc.date)) {
+    const t = fixDigits(box.lines.map((l) => l.text).join(' '));
+    // номер и дата идут подряд, иногда без пробела: «050000003185814.10.2026» — сначала отрезаем дату
+    const dt = t.match(/(\d{2})[.,](\d{2})[.,](20\d{2})/);
+    // дата обрезана краем полосы («050000003185814.1») — день «14» перед точкой к номеру не относится
+    const no = dt ? t.slice(0, dt.index).match(/\d{6,}/)?.[0] : t.match(/(\d{6,})\d{2}[.,]/)?.[1] ?? t.match(/\d{6,}/)?.[0];
+    if (no) doc.number ??= no;
+    if (dt && !doc.date) {
+      // год в мелкой рамке OCR путает («2049» вместо «2026»); накладная — свежий документ
+      const year = new Date().getFullYear();
+      const y = Number(dt[3]);
+      const ok = y === year || y === year - 1;
+      doc.date = `${dt[1]}.${dt[2]}.${ok ? y : year}`;
+      if (!ok) doc.issues.push(issue('warn', `Год даты накладной прочитан как ${y}, подставлен ${year} — сверьте дату`));
+    }
+  }
   addTextTotals(doc, page);
   checkTotals(doc);
   return doc;
+}
+
+/**
+ * Рамка «Номер документа | Дата составления» (форма З-2): значения под подписью часто не читаются
+ * общим проходом. Если номера в тексте нет — дочитываем область под подписью только цифрами
+ */
+export function planDocNumberStrip(page: OcrPage): StripPlan | undefined {
+  if (findNumberAndDate(page).number) return undefined;
+  const top = page.lines.filter((l) => l.y1 < page.height * 0.4);
+  const label = (re: RegExp) => {
+    for (const l of top) {
+      const i = l.words.findIndex((w, k) => /^[НH]омер$/i.test(w.text) && re.test(l.words[k + 1]?.text ?? ''));
+      if (i >= 0) return { l, a: l.words[i], b: l.words[i + 1] };
+    }
+    return undefined;
+  };
+  const plan = (x0: number, x1: number, a: BBox, b: BBox): StripPlan => {
+    const h = Math.max(a.y1 - a.y0, page.charHeight ?? 0, 12);
+    return {
+      role: 'docno', whitelist: '0123456789.',
+      x0: Math.max(0, x0 - h * 2), x1: Math.min(page.width, x1 + h * 4),
+      y0: Math.max(a.y1, b.y1) + 1, y1: Math.min(page.height, a.y1 + h * 3.5),
+    };
+  };
+  const doc = label(/^документ/i);
+  if (doc) {
+    const right = doc.l.words.find((w) => /^составлен/i.test(w.text));
+    return plan(doc.a.x0, right?.x1 ?? doc.b.x1 + (doc.b.x1 - doc.a.x0) * 1.5, doc.a, doc.b);
+  }
+  // подпись «Номер документа» не прочитана — ячейка номера идёт сразу правее «Номер заказа» (пустой обычно)
+  const order = label(/^заказ/i);
+  if (order) {
+    const w = order.b.x1 - order.a.x0;
+    // (вместе с ячейкой «Дата составления» правее — по дате видно, где кончается номер)
+    return plan(order.b.x1 + w * 0.2, order.b.x1 + w * 4.5, order.a, order.b);
+  }
+  return undefined;
 }
 
 /**
@@ -143,6 +205,12 @@ function addTextTotals(doc: ParsedDoc, page: OcrPage) {
     if (vat) {
       const t = (Number(vat[1].replace(/ /g, '').replace(',', '.')) * 116) / 16;
       found.push(Math.abs(t - Math.round(t)) < 0.1 ? Math.round(t) : round2(t));
+    }
+    // Строка «Итого» с нечитаемым словом («Wore: 70 70 x 36 953,00 x 5 096,98»): сумма и рядом её НДС 16% (12%)
+    const nums = extractNumbers(fixDigits(l.text.replace(/[`'’‘"“”„°|\]\[‚]/g, ' '))).filter((x) => x.hasDecimals);
+    for (let k = 0; k + 1 < nums.length; k++) {
+      const s = nums[k].value, v = nums[k + 1].value;
+      if (s >= rows * 0.5 && v > 0 && [0.16, 0.12].some((r) => near(v, round2((s * r) / (1 + r)), 0.03))) found.push(s);
     }
     // «…, на сумму 6 100 тенге» — сумма без копеек (итог жирным над ней OCR мог не прочитать)
     const whole = l.text.match(/на\s+сумму\s+(\d[\d ]*\d)\s*(?:тенге|тг|kzt)/i);
