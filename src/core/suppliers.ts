@@ -58,6 +58,11 @@ export interface Z2Options {
    * с перенесённой последней цифрой
    */
   barcodeInName?: boolean;
+  /**
+   * У товаров без штрихкода в столбце штрихкодов — внутренний код «УУ000000352» (пакеты у Юпитера):
+   * такие строки тоже товары, штрихкод для них подбирается по названию
+   */
+  internalCodes?: boolean;
   /** Штрихкод — в последнем столбце, правее сумм; строки при этом ищутся по суммам (code: 'none') */
   barcodeRight?: boolean;
   /** Столбец «Ед. изм.» стоит между наименованием и штрихкодом (Сауда Дистрибьюшн) */
@@ -255,10 +260,12 @@ export const SUPPLIERS: SupplierDef[] = [
     goods: 'Боржоми, минеральная вода',
     name: 'ТОО "Yupiter Aqtobe"',
     bins: [],
-    // OCR читает название и как «Уирйег Agtobe»
-    keywords: [/Yupiter/i, /Юпитер/i, /Yupi/, /Поставщик.*A[qg]tob/i],
+    // OCR читает название и как «Уирйег Agtobe», «upiter Адюбе», «piter Aq»; шапка таблицы
+    // «NTIN · Штрихкод · Товар · Общее · Кор · Штук» — своя у Юпитера, узнаём и по ней
+    keywords: [/Yupiter/i, /Юпитер/i, /Yupi/, /Поставщик.*A[qg]tob/i, /upiter\s+(?:A[qg]|Ад)/i,
+      /NTIN\s+Штрих\S*\s+Товар[\s\S]{0,40}Кор\s+Шту/i],
     parser: 'z2',
-    z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top' },
+    z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top', internalCodes: true },
   },
   {
     // Колбасы: штрихкод, код ТН ВЭД, «отпущено (кг)» между количеством и ценой

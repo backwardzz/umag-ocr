@@ -46,6 +46,11 @@ function cleanCode(text: string): string | undefined {
 
 /** EAN-8/13; 14 цифр — EAN-13 с лишней цифрой в конце (так печатает учётная программа некоторых поставщиков) */
 const eanLike = (c: string) => isValidEan(c) || (c.length === 14 && isValidEan(c.slice(0, 13)));
+/**
+ * Штрихкод товара, а не внутренний код: префикс GS1 020–029 зарезервирован для учёта внутри страны и
+ * склада — так устроен NTIN («0200133821095»), который печатают столбцом левее штрихкода (Юпитер)
+ */
+const productEan = (c: string) => eanLike(c) && !(c.length >= 13 && /^02/.test(c));
 
 function codeFits(code: string, opts: Z2Options): boolean {
   if (opts.code === 'ean') return code.length === 8 || (code.length >= 12 && code.length <= 14);
@@ -188,7 +193,7 @@ function findCodeAnchors(words: Word[], opts: Z2Options, lineH: number): Anchor[
   const inRange = (m: number[]) => cands.filter((c) => c.x0 >= m[0] && c.x0 <= m[m.length - 1]);
   const score = (m: number[]) => {
     const list = inRange(m);
-    return opts.code === 'ean' ? list.filter((c) => eanLike(c.code)).length * 3 + list.length : list.length;
+    return opts.code === 'ean' ? list.filter((c) => productEan(c.code)).length * 3 + list.length : list.length;
   };
   const best = cl.reduce((a, b) => (score(b.members) > score(a.members) ? b : a));
   let res = inRange(best.members);
@@ -197,9 +202,22 @@ function findCodeAnchors(words: Word[], opts: Z2Options, lineH: number): Anchor[
     const len = median(res.map((c) => c.code.length));
     res = res.filter((c) => Math.abs(c.code.length - len) <= 1);
   }
+  // У товаров без штрихкода в том же столбце — внутренний код поставщика «УУ000000352» (пакеты у Юпитера):
+  // это тоже строка товара, штрихкод для неё подберёт каталог по названию
+  if (opts.internalCodes && res.length) {
+    const x0 = Math.min(...res.map((c) => c.x0)) - lineH * 2, x1 = Math.max(...res.map((c) => c.x0)) + lineH * 2;
+    for (const w of words) {
+      const t = w.text.replace(/^[^\dA-Za-zА-Яа-я]+|[^\dA-Za-zА-Яа-я]+$/g, '');
+      if (w.x0 < x0 || w.x0 > x1 || !INTERNAL_CODE_RE.test(t) || res.some((c) => Math.abs(c.cy - w.cy) < lineH * 0.6)) continue;
+      res.push({ word: w, code: toCyrillic(t.replace(/\d.*$/, '').toUpperCase()) + t.replace(/^\D+/, ''), cy: w.cy, x0: w.x0, x1: w.x1 });
+    }
+  }
   // Дубликаты (одно слово попало в две строки OCR)
   return dedupeByY(res, lineH);
 }
+
+/** Внутренний код «УУ000000352» / «У0000001845» (OCR читает «У» и как Y) */
+const INTERNAL_CODE_RE = /^[УуYy]{1,2}\d{8,11}$/;
 
 /** Накладная без кодов: якорь — самый правый из самых заполненных столбцов чисел */
 function findNumericAnchors(page: OcrPage, words: Word[], lineH: number): Anchor[] {
@@ -936,7 +954,7 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
         ...v.filter((x) => Number.isInteger(x) && x >= 10 && x < 100 && x % 10 !== 0).map((x) => x / 10),
       ] : v;
     };
-    const sol = solveRow({
+    const readings = {
       qty: [...qtyOf('qtyPlan'), ...qtyOf('qty')],
       qtyPlan: qtyOf('qtyPlan'),
       weight,
@@ -945,7 +963,19 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
       vat: numsOf('vat'),
       vatRate: VAT_RATE,
       vatIncluded: true,
-    });
+    };
+    let sol = solveRow(readings);
+    // Строка не сошлась (сумма испорчена, количество не прочитано), а между ценой и суммой есть пропущенный
+    // столбец — «Сумма без скидки» (Юпитер): без скидки она равна сумме, пробуем её прочтения
+    if (sol.support === 0) {
+      const pi = colOf('price'), si = colOf('sum');
+      const between = roles.flatMap((r, ci) => (r === 'skip' && ci > pi && ci < si ? [ci] : []));
+      const extra = between.flatMap((ci) => readValues(rowCols[i][ci]?.num?.num, 'sum'));
+      if (pi >= 0 && extra.length) {
+        const retry = solveRow({ ...readings, sum: [...readings.sum, ...extra] });
+        if (retry.support > 0) sol = retry;
+      }
+    }
 
     const item: ParsedItem = {
       n: i + 1,
@@ -1025,6 +1055,12 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     if (it.unit) return;
     // (только у надёжно прочитанной строки — дробь из мусорных прочтений не делает товар весовым)
     if (it.qty !== undefined && !Number.isInteger(it.qty) && (it.readings?.support ?? 0) >= 3) { it.unit = 'кг'; return; }
+    // «шт» прочитано как «wr» (так OCR читает и «кг») или прилипло к количеству («ло’шт»): в накладной без весовых
+    // строк при целом количестве это штуки, а не единица соседних строк («бут» у Боржоми над пакетами)
+    // (в строке есть «бут», «Збут» — единица бутылки, а «3wr» — столбец «Штук» правее, Global Wine)
+    const raw = it.raw ?? '';
+    if (!units.has('кг') && Number.isInteger(it.qty ?? 0.5) && !/бут/i.test(raw)
+      && /(?:^|[^a-zа-яё])(?:шт|wr|wt|ur)(?=$|[^a-zа-яё])/i.test(raw)) { it.unit = 'шт'; return; }
     if (units.size === 1) { it.unit = [...units][0]; return; }
     const prev = read.slice(0, i).reverse().find(Boolean), next = read.slice(i + 1).find(Boolean);
     const guess = prev && next ? (prev === next ? prev : undefined) : prev ?? next;
@@ -1253,6 +1289,8 @@ function cleanName(allWords: Word[], lineH: number, inlineCode = false, rowNo?: 
 
 /** Выбор кода из двух прочтений и проверка EAN */
 function applyCode(item: ParsedItem, anc: Anchor, opts: Z2Options) {
+  // внутренний код поставщика вместо штрихкода — штрихкода у товара в накладной нет
+  if (opts.internalCodes && /^\D/.test(anc.code)) { item.code = anc.code; return; }
   const reads = [anc.code, anc.stripCode].filter((c): c is string => !!c && codeFits(c, opts));
   if (opts.code !== 'ean') {
     // У кодов поставщика нет контрольной цифры: основное — прочтение первого прохода,
