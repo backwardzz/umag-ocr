@@ -88,7 +88,18 @@ export function pageInsertIndex(a: ParsedDoc, b: ParsedDoc): number {
 }
 
 /** Лист-продолжение таблицы: без шапки — ни поставщика, ни номера, ни даты */
-export const isContinuation = (doc: ParsedDoc) => !!doc.items.length && !doc.supplier && !doc.supplierBin && !doc.number && !doc.date;
+export const isContinuation = (doc: ParsedDoc) => !!doc.items.length && !doc.supplier && !doc.supplierBin && !doc.number && !doc.date
+  // своё «Итого», с которым сходятся строки, — законченная накладная (на последнем листе итог за все листы и с его строками не сходится)
+  && !(doc.totals?.sum !== undefined && near(doc.totals.sum, rowsSum(doc), 0.05 + doc.items.length * 0.01));
+
+/**
+ * Лист может быть продолжением таблицы накладной: тот же вид таблицы — штрихкоды или коды поставщика в строках
+ * есть у обоих или нет у обоих (у «Айс-плюс» штрихкоды в каждой строке, у бланка без кодов их нет — это не её лист)
+ */
+export function sameTable(a: ParsedDoc, b: ParsedDoc): boolean {
+  const coded = (d: ParsedDoc) => d.items.filter((it) => it.code || it.ocrBarcode || (it.barcode && it.barcodeSource === 'invoice')).length / Math.max(1, d.items.length);
+  return (coded(a) >= 0.5) === (coded(b) >= 0.5) && a.format === b.format;
+}
 
 /** Накладная ждёт следующий лист: итог не найден (он обычно на последнем листе) */
 export const awaitsSheet = (d: DocEntry) => !!d.doc && d.doc.totals?.sum === undefined && !isContinuation(d.doc);

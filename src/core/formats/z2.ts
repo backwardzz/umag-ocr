@@ -1045,6 +1045,26 @@ export function parseZ2(page: OcrPage, opts: Z2Options): ParsedDoc {
     }
   }
 
+  // Цена обрезана («490» → «4»: строка прижата к шапке таблицы), количество вычислено из суммы — «3 675 шт по 4 ₸».
+  // Если сумма ровно делится на цену, повторяющуюся у соседних строк, и та в десятки раз больше — берём её
+  if (prices.length >= 3) {
+    for (const it of doc.items) {
+      if (it.price === undefined || it.sum === undefined || !it.qty) continue;
+      const others = doc.items.filter((x) => x !== it && x.price !== undefined).map((x) => x.price!);
+      const med = median(others);
+      if (it.price >= med * 0.1) continue;
+      const counts = new Map<number, number>();
+      for (const p of others) counts.set(p, (counts.get(p) ?? 0) + 1);
+      const fit = [...counts].filter(([p, n]) => n >= 2 && Number.isInteger(round2(it.sum! / p)) && it.sum! / p >= 1).sort((a, b) => b[1] - a[1])[0];
+      if (!fit) continue;
+      const [p] = fit;
+      it.issues = [...it.issues.filter((x) => x.level !== 'info'),
+        issue('warn', `Цена прочитана как ${it.price} — по сумме и цене соседних строк ${round2(it.sum / p)} × ${p}, сверьте`)];
+      it.qty = round2(it.sum / p);
+      it.price = p;
+    }
+  }
+
   if (opts.code === 'ean' || opts.barcodeInName) repairByNeighbors(doc.items);
 
   // Единица не прочитана: дробное количество — кг; иначе единица всей накладной, если она одна,
@@ -1439,5 +1459,28 @@ export function findNumberAndDate(page: OcrPage): { number?: string; date?: stri
     const nums = before.match(/\d[\d-]{2,}/g);
     return { date: d.date, number: nums ? nums[nums.length - 1] : undefined };
   }
-  return {};
+  const split = findSplitDayDate(page);
+  return split ? { date: split } : {};
+}
+
+/**
+ * «26 октября 2026 г.» крупным шрифтом: цифры дня OCR читает отдельными словами в других строках («2», «6»),
+ * а «Октября 2026 г.» — строкой без дня. День — цифры слева вплотную к месяцу на той же высоте
+ */
+function findSplitDayDate(page: OcrPage): string | undefined {
+  const words = flattenWords(page);
+  const monthRe = new RegExp(`^(${MONTHS.join('|')})`, 'i');
+  for (const m of words) {
+    if (m.cy > page.height * 0.45 || !monthRe.test(m.text)) continue;
+    const year = words.find((w) => w.line === m.line && w.x0 > m.x1 && /^20\d{2}$/.test(fixDigits(w.text)));
+    if (!year) continue;
+    const h = m.y1 - m.y0;
+    const digits = words
+      .filter((w) => /^\d{1,2}$/.test(w.text) && w.x1 <= m.x0 + h * 0.2 && w.x1 > m.x0 - h * 3 && w.y1 > m.y0 && w.y0 < m.y1)
+      .sort((a, b) => a.x0 - b.x0);
+    const day = Number(digits.map((w) => w.text).join(''));
+    const mi = MONTHS.findIndex((x) => new RegExp(`^${x}`, 'i').test(m.text));
+    if (day >= 1 && day <= 31) return `${String(day).padStart(2, '0')}.${String(mi + 1).padStart(2, '0')}.${fixDigits(year.text)}`;
+  }
+  return undefined;
 }

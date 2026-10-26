@@ -2,7 +2,7 @@
  * Пересчёт единиц (1 блок = 10 шт) и массовые правки строк — без OCR, на искусственных данных.
  *   npx tsx scripts/test-units.ts
  */
-import { allIssues, applyUnitRules, approveAll, attachPage, awaitsSheet, bulkEdit, fixByTotals, isContinuation, isSamePage, mergePages, patchItem, worstLevel, type DocEntry } from '../src/app/model';
+import { allIssues, applyUnitRules, approveAll, attachPage, awaitsSheet, bulkEdit, fixByTotals, isContinuation, isSamePage, mergePages, sameTable, patchItem, worstLevel, type DocEntry } from '../src/app/model';
 import { issue } from '../src/core/types';
 import { buildRows, DEFAULT_EXPORT, DEFAULT_UNIT_RULES, type ExportSettings } from '../src/core/export';
 import type { ParsedDoc, ParsedItem } from '../src/core/types';
@@ -94,7 +94,7 @@ check(saudaBase({ href: 'x', hostname: 'y' }, 'https://my.site/app') === 'https:
 console.log('Склейка листов');
 const sheet = (from: number, n: number, extra: Partial<ParsedDoc> = {}): ParsedDoc => ({
   format: 'z2', formatName: 'z2', issues: [], ...extra,
-  items: Array.from({ length: n }, (_, i) => item({ n: i + 1, name: `Товар ${from + i}`, barcode: `46${String(from + i).padStart(11, '0')}`, qty: 1, price: 100, sum: 100 })),
+  items: Array.from({ length: n }, (_, i) => item({ n: i + 1, name: `Товар ${from + i}`, barcode: `46${String(from + i).padStart(11, '0')}`, barcodeSource: 'invoice', qty: 1, price: 100, sum: 100 })),
 });
 const p1 = sheet(1, 31, { supplier: 'ТОО "KDV Казахстан"', number: '9528700271', date: '14.10.2026' });
 const p2 = sheet(32, 40, { issues: [issue('warn', 'Формат накладной не распознан — разобрано как форма З-2, проверьте внимательно')] });
@@ -114,7 +114,16 @@ check(j.doc!.number === '9528700271' && j.doc!.supplier === 'ТОО "KDV Каз�
 check(j.doc!.totals?.sum === 7900 && j.doc!.issues.some((x) => x.kind === 'vat-total'), 'итог с потерянной цифрой восстановлен по НДС');
 check(!j.doc!.issues.some((x) => x.text.startsWith('Формат накладной не распознан')), 'у листа-продолжения нет замечания «формат не распознан»');
 check(isSamePage(j.doc!, p2) && !isSamePage(p1, p2), 'тот же лист повторно узнаётся');
-const kg: ParsedDoc = { format: 't', formatName: 't', issues: [], totals: { qty: 10.5 }, items: [
+// Две разные накладные: у первой итог не прочитан (ждёт лист), у второй нет шапки — но своё «Итого» сходится
+const ice = sheet(1, 14, { supplier: 'ТОО "Айс-плюс"', number: '493546', date: '26.10.2026' });
+const maxi: ParsedDoc = { ...sheet(100, 13), totals: { sum: 1300 } };
+maxi.items = maxi.items.map((x) => ({ ...x, barcode: undefined, code: undefined }));
+check(!isContinuation(maxi), 'лист без шапки со своим сошедшимся «Итого» — отдельная накладная, не продолжение');
+const tail: ParsedDoc = { ...sheet(15, 3), totals: { sum: 1700 } };
+check(isContinuation(tail), 'последний лист: «Итого» за все листы с его строками не сходится — продолжение');
+check(!sameTable(ice, { ...maxi, totals: undefined }) && sameTable(ice, tail), 'продолжение — только к таблице того же вида (со штрихкодами к штрихкодам)');
+
+const kg: ParsedDoc ={ format: 't', formatName: 't', issues: [], totals: { qty: 10.5 }, items: [
   item({ name: 'Мармелад', unit: 'кг', qty: 5, price: 156.2, sum: 781, readings: { price: [1562, 1562], sum: [781], support: 3 } }),
   item({ name: 'Печенье /5', unit: 'кг', qty: 5, price: 1196, sum: 5980, readings: { price: [1196], sum: [5980], support: 4 } }),
   item({ name: 'Печенье', unit: 'кг', qty: 10, price: 100, sum: 1000 }),

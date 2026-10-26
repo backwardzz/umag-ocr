@@ -7,7 +7,7 @@ import { CatalogIndex, loadCatalog, saveCatalog, type CatalogItem } from './core
 import { toReportBlob, type ExportSettings } from './core/export';
 import { issue, sourceName, type ParsedDoc, type ParsedItem } from './core/types';
 import {
-  applyCatalog, applyCatalogNames, applyMapping, fillBarcodeByName, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, fixByTotals, isSamePage, attachPage, isContinuation, awaitsSheet, newItem, patchItem, ruleFor,
+  applyCatalog, applyCatalogNames, applyMapping, fillBarcodeByName, applyUnitRules, bulkEdit, docSupplierKey, enrichDoc, findRelated, fixByTotals, isSamePage, attachPage, isContinuation, awaitsSheet, sameTable, newItem, patchItem, ruleFor,
   type BulkOp, type DocEntry,
 } from './app/model';
 import { loadSettings, saveSettings, downloadBlob } from './app/storage';
@@ -86,9 +86,10 @@ export default function App() {
         const doc = prepare(res.doc);
         const self = docsRef.current.find((d) => d.id === id);
         let rel = findRelated(docsRef.current, id, doc);
-        // Лист-продолжение без шапки, загруженный вместе с первым: если ровно одна накладная ждёт следующий лист — он её
+        // Лист-продолжение без шапки, загруженный вместе с первым: если ровно одна накладная ждёт следующий лист
+        // и таблица у неё того же вида — он её
         if (!rel && isContinuation(doc)) {
-          const waiting = docsRef.current.filter((d) => d.id !== id && awaitsSheet(d));
+          const waiting = docsRef.current.filter((d) => d.id !== id && awaitsSheet(d) && sameTable(d.doc!, doc));
           if (waiting.length === 1) rel = { kind: 'page', target: waiting[0] };
         }
         if (rel?.kind === 'page' && self) {
