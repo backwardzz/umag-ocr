@@ -11,9 +11,15 @@
     "preview": "vite preview",
     "ocr": "tsx scripts/ocr-cli.ts",
     "test": "tsx scripts/test-units.ts && tsx scripts/test-catalog-names.ts && tsx scripts/test-parsers.ts",
-    "catalog": "tsx scripts/eval-catalog.ts"
+    "catalog": "tsx scripts/eval-catalog.ts",
+    "apk": "npm run build && npx cap sync android && cd android && gradlew.bat assembleDebug"
   },
   "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/browser": "^6.0.4",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.2",
+    "@capacitor/share": "^6.0.3",
     "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -21,6 +27,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
     "@types/node": "^20.14.0",
     "@types/pngjs": "^6.0.5",
     "@types/react": "^18.3.3",

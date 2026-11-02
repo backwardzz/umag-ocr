@@ -20,6 +20,7 @@ import { IconAutoTheme, IconBack, IconBook, IconHelp, IconMoon, IconSettings, Ic
 import { FormatsList, FORMATS_COUNT } from './app/FormatsList';
 import { THEME_LABEL, useTheme, type ThemePref } from './app/theme';
 import { saudaBase, saudaOverride } from './core/sauda';
+import { isNative, SAUDA_PUBLIC } from './app/native';
 
 const NEXT_THEME: Record<ThemePref, ThemePref> = { auto: 'light', light: 'dark', dark: 'auto' };
 
@@ -292,7 +293,8 @@ export default function App() {
   };
 
   const doneDocs = docs.filter((d) => d.doc).map((d) => d.doc!);
-  const saudaDocs = `${saudaBase(window.location, saudaOverride())}#/docs/supply`;
+  // в приложении для Android сайт открыт на localhost — ссылка на опубликованную Sauda (откроется в браузере телефона)
+  const saudaDocs = `${isNative() ? saudaOverride() ?? SAUDA_PUBLIC : saudaBase(window.location, saudaOverride())}#/docs/supply`;
 
   return (
     <div className="app">

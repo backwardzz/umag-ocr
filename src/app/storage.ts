@@ -1,4 +1,5 @@
 import { DEFAULT_EXPORT, type ExportSettings, type ExportColumn } from '../core/export';
+import { isNative, shareFile } from './native';
 
 const KEY = 'umag-ocr.settings.v1';
 const ALL: ExportColumn[] = ['barcode', 'qty', 'name', 'unit', 'price', 'sum', 'code'];
@@ -36,6 +37,14 @@ export function saveSettings(s: ExportSettings) {
 }
 
 export function downloadBlob(blob: Blob, name: string) {
+  // в приложении для Android скачивание из WebView не работает — файл уходит в «Поделиться»
+  if (isNative()) {
+    shareFile(blob, name).catch((err: unknown) => {
+      // пользователь закрыл меню «Поделиться» — это не ошибка
+      if (!/cancel/i.test(String(err))) alert(`Не удалось сохранить «${name}»: ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

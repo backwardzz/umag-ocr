@@ -3,6 +3,7 @@
  * фото -> (воркер) предобработка -> Tesseract (rus+eng) в два прохода -> разбор формата.
  */
 import { createWorker, type Worker as TessWorker, PSM } from 'tesseract.js';
+import { Capacitor } from '@capacitor/core';
 import { toOcrPage, type OcrPage } from '../core/ocrTypes';
 import { recognizePage, type Recognizer } from '../core/pipeline';
 import { grayToRGBA, type Gray } from '../core/image';
@@ -34,6 +35,8 @@ function getTesseract(): Promise<TessWorker> {
         workerPath: abs('tesseract/worker.min.js'),
         corePath: abs('tesseract/core'),
         langPath: abs('tesseract/lang'),
+        // в APK сборщик Android распаковывает «*.traineddata.gz» и убирает «.gz» — там модели лежат несжатыми
+        gzip: !Capacitor.isNativePlatform(),
         logger: (m: { status: string; progress: number }) => {
           if (m.status === 'recognizing text') onTessProgress?.(m.progress);
         },

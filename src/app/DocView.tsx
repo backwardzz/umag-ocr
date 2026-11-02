@@ -8,6 +8,7 @@ import { BulkBar } from './BulkBar';
 import { PhotoViewer } from './PhotoViewer';
 import { saudaBase, saudaLink, saudaOverride } from '../core/sauda';
 import { downloadBlob, copyText } from './storage';
+import { isNative, openExternal, SAUDA_PUBLIC } from './native';
 import { IconCopy, IconDownload, IconTrash, IconAlert, IconCheck, IconRefresh, IconX, IconPlus } from './Icons';
 
 const plural = (n: number, one: string, few: string, many: string) =>
@@ -140,7 +141,10 @@ export function DocView({ entry, settings, catalog, onDocChange, onItemChange, o
   };
   const toSauda = () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего отправлять'); return; }
-    window.open(saudaLink(saudaBase(window.location, saudaOverride()), doc, settings), '_blank', 'noopener');
+    const url = saudaLink(isNative() ? saudaOverride() ?? SAUDA_PUBLIC : saudaBase(window.location, saudaOverride()), doc, settings);
+    // в приложении — в браузере телефона: окно из WebView не открывается
+    if (isNative()) openExternal(url).catch(() => toast('Не удалось открыть Sauda'));
+    else window.open(url, '_blank', 'noopener');
   };
   const copy = async () => {
     if (!dataRows) { toast('Нет строк со штрихкодом — нечего копировать'); return; }
