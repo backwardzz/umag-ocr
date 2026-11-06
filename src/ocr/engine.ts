@@ -55,7 +55,7 @@ function getTesseract(): Promise<TessWorker> {
 
 let ppWorker: Worker | null = null;
 let ppSeq = 0;
-function preprocessInWorker(img: ImageData): Promise<PreprocessResponse> {
+function preprocessInWorker(img: ImageData, keepPaperBorder = false): Promise<PreprocessResponse> {
   if (!ppWorker) ppWorker = new Worker(new URL('./preprocess.worker.ts', import.meta.url), { type: 'module' });
   const id = ++ppSeq;
   return new Promise((resolve, reject) => {
@@ -66,7 +66,7 @@ function preprocessInWorker(img: ImageData): Promise<PreprocessResponse> {
       else resolve(e.data);
     };
     ppWorker!.addEventListener('message', onMsg);
-    const req: PreprocessRequest = { id, data: img.data, width: img.width, height: img.height };
+    const req: PreprocessRequest = { id, data: img.data, width: img.width, height: img.height, keepPaperBorder };
     ppWorker!.postMessage(req, [img.data.buffer]);
   });
 }
@@ -160,7 +160,11 @@ export function recognizeInvoice(file: Blob, onProgress: Progress, signal?: Abor
           const p = await preprocessInWorker(await loadImageData(file, cw ? 1 : -1));
           check();
           return { image: toGrayImage(p), extra: { rules: p.rules, charHeight: p.charHeight } };
-        }, hint);
+        }, hint, async () => {
+          const p = await preprocessInWorker(await loadImageData(file), true);
+          check();
+          return p.borderAdded ? { image: toGrayImage(p), extra: { rules: p.rules, charHeight: p.charHeight } } : null;
+        });
       const shownPng = used === image ? processedPng : await grayToPng(used);
       if (import.meta.env.DEV) {
         const g = globalThis as Record<string, unknown>;

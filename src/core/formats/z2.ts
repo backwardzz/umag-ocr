@@ -259,7 +259,8 @@ function numberBands(anchors: Anchor[], opts: Z2Options, lineH: number, pitch: n
   return anchors.map((a, i) => {
     const prev = anchors[i - 1]?.cy, next = anchors[i + 1]?.cy;
     if (align === 'top') {
-      const bottom = next !== undefined ? next - lineH * 0.6 : Math.min(a.cy + Math.max(pitch, lineH * 3), totalsTop);
+      const bottom = next !== undefined ? next - lineH * 0.6
+        : Math.min(a.cy + (opts.lastRowInline ? lineH * 0.6 : Math.max(pitch, lineH * 3)), totalsTop);
       return { top: a.cy - lineH * 0.6, bottom };
     }
     if (align === 'bottom') {

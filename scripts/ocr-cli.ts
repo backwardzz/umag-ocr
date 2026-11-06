@@ -112,7 +112,10 @@ for (const file of files) {
     const r = rotate90(img.data, img.width, img.height, cw);
     const p = preprocess(r.data, r.width, r.height);
     return { image: p.image, extra: { rules: p.rules, charHeight: p.charHeight * p.scale } };
-  }, hint);
+  }, hint, async () => {
+    const p = preprocess(img.data, img.width, img.height, { keepPaperBorder: true });
+    return p.borderAdded ? { image: p.image, extra: { rules: p.rules, charHeight: p.charHeight * p.scale } } : null;
+  });
   if (image !== pre.image) fs.writeFileSync(path.join('out', `${base}.pre.png`), toPng(image));
   const t2 = Date.now();
   fs.writeFileSync(file.replace(/\.\w+$/, '.ocr.json'), JSON.stringify(page, null, 1));

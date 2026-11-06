@@ -28,9 +28,13 @@ export interface PreprocessOptions {
   suppressColor?: boolean;
   /** Выравнивать перекос */
   deskew?: boolean;
+  /** Не стирать полосы листа у рамки кадра, которые темнее основной бумаги (запасной проход) */
+  keepPaperBorder?: boolean;
 }
 
 export interface PreprocessResult {
+  /** При keepPaperBorder: маска листа вышла шире обычной (иначе повторять распознавание незачем) */
+  borderAdded?: boolean;
   image: Gray;
   scale: number;
   charHeight: number;
@@ -640,7 +644,14 @@ export function preprocess(rgba: ArrayLike<number>, w: number, h: number, opts: 
   const maxDim = Math.max(g.w, g.h);
   if (maxDim > 3200) g = downscale(g, 3200 / maxDim);
 
-  const inPaper = paperMask(g, Math.max(16, Math.round(Math.max(g.w, g.h) / 80)));
+  const block = Math.max(16, Math.round(Math.max(g.w, g.h) / 80));
+  const inPaper = paperMask(g, block, undefined, opts.keepPaperBorder);
+  let borderAdded: boolean | undefined;
+  if (opts.keepPaperBorder) {
+    const usual = paperMask(g, block);
+    borderAdded = false;
+    for (let y = 0; y < g.h && !borderAdded; y += block) for (let x = 0; x < g.w; x += block) if (inPaper(x, y) !== usual(x, y)) { borderAdded = true; break; }
+  }
   const win = Math.max(15, Math.round(Math.min(g.w, g.h) / 40)) | 1;
   const T = sauvolaThreshold(g, win);
   const bin0 = binarize(g, T);
@@ -693,7 +704,7 @@ export function preprocess(rgba: ArrayLike<number>, w: number, h: number, opts: 
       v: findRules(lines.vMask, W, lines.vBuckets, (H * 0.1) / 8, outChar),
     }
     : { h: [], v: [] };
-  return { image, scale, charHeight, skew, lines, rules };
+  return { image, scale, charHeight, skew, lines, rules, borderAdded };
 }
 
 /** Gray -> RGBA (для canvas / PNG) */

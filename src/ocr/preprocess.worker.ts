@@ -7,9 +7,11 @@ export interface PreprocessRequest {
   data: Uint8ClampedArray;
   width: number;
   height: number;
+  keepPaperBorder?: boolean;
 }
 
 export interface PreprocessResponse {
+  borderAdded?: boolean;
   id: number;
   width: number;
   height: number;
@@ -20,9 +22,9 @@ export interface PreprocessResponse {
 }
 
 self.onmessage = (e: MessageEvent<PreprocessRequest>) => {
-  const { id, data, width, height } = e.data;
+  const { id, data, width, height, keepPaperBorder } = e.data;
   try {
-    const res = preprocess(data, width, height);
+    const res = preprocess(data, width, height, { keepPaperBorder });
     const rgba = grayToRGBA(res.image);
     const msg: PreprocessResponse = {
       id,
@@ -31,6 +33,7 @@ self.onmessage = (e: MessageEvent<PreprocessRequest>) => {
       rgba,
       rules: res.rules,
       charHeight: res.charHeight * res.scale,
+      borderAdded: res.borderAdded,
     };
     (self as unknown as Worker).postMessage(msg, [rgba.buffer]);
   } catch (err) {

@@ -72,6 +72,11 @@ export interface Z2Options {
    * внизу строки при коде у верхнего края (top) или на последней линии строки (bottom)
    */
   rowAlign?: 'center' | 'top' | 'bottom';
+  /**
+   * Числа последней строки — на линии кода, а сразу под таблицей идёт строка итогов без слова «Итого»
+   * (количество, сумма скидки, сумма): иначе при rowAlign top она попадает в последнюю строку
+   */
+  lastRowInline?: boolean;
 }
 
 export interface SupplierDef {
@@ -373,7 +378,7 @@ export const SUPPLIERS: SupplierDef[] = [
     bins: [],
     keywords: [/Заявка\s*№?\s*АБ-?\d/i, /Со\s+склада:[\s\S]{0,60}(?:Марс|ПНБ)/i],
     parser: 'z2',
-    z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top' },
+    z2: { code: 'ean', nameDir: 'down', nameSide: 'right', rowAlign: 'top', lastRowInline: true },
   },
   {
     // Форма З-2 с двумя QR-кодами: Наименование (в 2–5 строк), Ед. изм., Штрихкод, количество мест / штук / всего,

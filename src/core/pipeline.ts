@@ -56,7 +56,10 @@ export async function recognizePage(
   onStage?: (stage: string, fraction: number) => void,
   rotated?: Rotated,
   hint?: FormatHint,
+  /** То же фото, предобработанное с сохранением края листа у рамки кадра (null — маска та же) */
+  wider?: () => Promise<{ image: Gray; extra: PageExtra } | null>,
 ): Promise<{ page: OcrPage; doc: ParsedDoc; image: Gray }> {
+  const image0 = image;
   let lines = await recognize(image, {});
   // Фото снято боком (EXIF об этом молчит): текста почти не найдено — пробуем оба поворота и берём лучший
   const q0 = textQuality(lines);
@@ -68,6 +71,39 @@ export async function recognizePage(
       if (textQuality(l) >= Math.max(10, q0 * 3, textQuality(lines) + 1)) { image = cand.image; extra = cand.extra; lines = l; }
     }
   }
+  const turned = image !== image0;
+  let best = await finishPage(image, extra, lines, recognize, onStage, hint);
+  // Итог не сошёлся: возможно, край листа у рамки кадра (часто там столбец «Сумма») принят за стол и стёрт.
+  // Повторяем с сохранённым краем и берём результат, если он лучше
+  if (wider && !turned && !totalsMatch(best.doc)) {
+    onStage?.('Повтор: край листа у рамки кадра', 0);
+    const cand = await wider();
+    if (cand) {
+      const l = await recognize(cand.image, {});
+      const alt = await finishPage(cand.image, cand.extra, l, recognize, onStage, hint);
+      if (docScore(alt.doc) > docScore(best.doc)) best = alt;
+    }
+  }
+  return best;
+}
+
+const totalsMatch = (doc: ParsedDoc) => doc.issues.some((i) => i.kind === 'totals' && i.level === 'info');
+
+/** Насколько разбор правдоподобен: сошёлся ли итог, сколько предупреждений и ошибок (в шапке и в строках) */
+export function docScore(doc: ParsedDoc): number {
+  if (!doc.items.length) return -1000;
+  const totals = doc.issues.find((i) => i.kind === 'totals');
+  let s = totals?.level === 'info' ? 1000 : totals?.level === 'warn' ? 300 : 0;
+  const all = [...doc.issues.filter((i) => i.kind !== 'totals'), ...doc.items.flatMap((it) => it.issues)];
+  for (const i of all) s -= i.level === 'error' ? 20 : i.level === 'warn' ? 5 : 0;
+  return s;
+}
+
+/** Второй проход по столбцам и разбор накладной */
+async function finishPage(
+  image: Gray, extra: PageExtra, lines: OcrLine[], recognize: Recognizer,
+  onStage: ((stage: string, fraction: number) => void) | undefined, hint: FormatHint | undefined,
+): Promise<{ page: OcrPage; doc: ParsedDoc; image: Gray }> {
   const page: OcrPage = { width: image.w, height: image.h, lines: [...lines].sort((a, b) => a.y0 - b.y0), ...extra };
   const plan = planStrips(page, hint);
   if (plan.length) {
